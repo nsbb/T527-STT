@@ -905,7 +905,37 @@ Part A: CNN Feature Extractor (uint8)     Part B: Transformer Encoder + LM Head 
 - vpm_run 직접 체이닝 불가, 커스텀 코드 필요
 - 테스트 스크립트: `test_split_model.sh`
 
-### 8.15 결론 및 교훈
+### 8.15 Clean 모델 int16 시뮬레이션 검증 (2026-03-16 08:33)
+
+nopad 트릭 없이 원본 ONNX를 opset12로 re-export한 "clean" 모델에 대해 int16 DFP 시뮬레이션을 실행하고, PyTorch FP32와 직접 비교:
+
+**결과: int16 DFP = FP32 = PyTorch FP32 — 세 가지 모두 완전히 동일**
+
+| 방법 | logit 범위 | PAD count | 디코딩 출력 |
+|------|-----------|-----------|------------|
+| PyTorch FP32 | [-5.665, 11.993] | 95/149 | ㄱㅡㄴㅡㄴ ㄱㅙㄴㅊㅏㄹㅡㄴ ㅈㅓㄱㅎㅏㄹㅕㄱㅇㅗ ㅇㅐㅆㅡㄴㅡㄴ ㄱㅓㅅ ㄱㅏㅌㄷㅏ |
+| Pegasus FP32 | [-5.665, 11.993] | 95/149 | (동일) |
+| **Pegasus int16 DFP** | **[-5.665, 11.993]** | **95/149** | **(동일)** |
+
+자모 합성: **"그는 괜차른 적하력오 애쓰는 것 같다"** → 원문 추정: "그는 괜찮은 척하려고 애쓰는 것 같다"
+
+**96개 캘리브레이션 샘플 PyTorch FP32 결과 (대표 8종):**
+
+| 샘플 | FP32 디코딩 | 자모합성 | 추정 정답 |
+|------|------------|---------|----------|
+| 0000 | ㄱㅡㄴㅡㄴ ㄱㅙㄴㅊㅏㄹㅡㄴ... | 그는 괜차른 적하력오 애쓰는 것 같다 | 그는 괜찮은 척하려고 애쓰는 것 같다 |
+| 0001 | ㅈㅣㅎㅏㅊㅓㄹㅎㅐㅅㅓ... | 지하철해서 다리를 벌리고 한지만 | 지하철에서 다리를 벌리고 앉지만 |
+| 0002 | ㅂㅜㅁㅗㄱㅏ... | 부모가 저지르는 큰실스 증 하나닌 | 부모가 저지르는 큰실수 중 하나인 |
+| 0003 | ㅈㅗㅁㅣㄴㄷㅡㅇ... | 조민등녹증을 보아 주시게아요 | 주민등록증을 보여 주시겠어요 |
+| 0004 | ㅇㅏㅂㅏㅇㅢ... | 아바의 운전을 자대 | 아빠의 운전을 잘해 |
+| 0005 | ㄱㅐㅇㅕㄹ... | 개열 기업있고 이라치 핬습니까 | 개월 기업이고 이러치 했습니까 |
+| 0006 | ㄴㅓㅁㅇㄴ... | 넘이상저기하시기 | (짧은 발화) |
+| 0007 | ㄸㅓㄴㅌㅔ... | 떤테 입을 | (짧은 발화) |
+
+**핵심: int16 DFP는 FP32 품질을 100% 보존.** NPU에서 int16이 동작하면, 위 수준의 한국어 STT가 가능.
+clean int16 NB: `wksp/clean_int16_nbg_unify_nbg_unify/network_binary.nb` (153MB)
+
+### 8.16 결론 및 교훈
 
 1. **base 아키텍처(94M, 12L)도 한국어 wav2vec2는 uint8 양자화 실패** — 영어 base-960h(CER 17.52%)와 동일 구조임에도 실패. vocab이 작아(56 vs 32) 양자화에 유리할 것으로 예상했으나, Transformer의 양자화 오류 누적은 vocab 크기와 무관하게 발생.
 
@@ -919,12 +949,13 @@ Part A: CNN Feature Extractor (uint8)     Part B: Transformer Encoder + LM Head 
 
 6. **시도한 50종+ 양자화/모델 변형 전략 요약:**
    - ✅ 성공: 없음 (디바이스 FEL 모드로 Phase 3-4 NPU 미테스트)
-   - ⚠️ 시뮬레이션 유망: int16 DFP (FP32와 거의 동일), split model (CNN uint8 + Transformer int16)
+   - ⚠️ **시뮬레이션 검증 완료**: clean int16 DFP (FP32 = PyTorch FP32 = int16, 100% 동일)
+   - ⚠️ 시뮬레이션 유망: split model (CNN uint8 3.7MB + Transformer int16 139MB)
    - ⚠️ 부분 성공: nopad10_ma (NPU non-PAD 출력, 81% ㅇ 토큰)
    - ❌ 시뮬레이션 실패: 6L, 8L, 10L, ReLU, SmoothQuant, Temperature scaling, MA 96-cal 증강, weight clip(uint8), symmetric int8
    - ❌ NB 생성 불가: bf16(opset12/14), int16(opset14), PCQ, symmetric_affine (gen_nbg segfault/error)
    - 🔍 **미테스트 (Phase 3):** onnxsim으로 동적 연산 제거한 NB 4종
-   - 🔍 **미테스트 (Phase 4, 최우선):** opset 12 re-export NB 14종 + XLS-R 12L opset12 NB 2종
+   - 🔍 **미테스트 (Phase 4, 최우선):** opset 12 re-export NB 14종 + XLS-R 12L opset12 NB 2종 + clean int16 + split model 3종
 
 6. **ONNX 동적 연산 차이 발견** — 한국어 모델은 **opset 14** (SDPA)로 export되어 attention에서 Shape→Gather→Concat→Reshape 동적 패턴(349개 추가 노드)을 생성. 영어 모델은 **opset 12** (수동 attention)로 export되어 static Reshape만 사용. `onnxsim`으로 동적 연산 제거 시 627노드 감소(1306→679). **opset 12로 re-export하면 근본적으로 동적 연산이 발생하지 않음** (849 nodes, Shape 1).
 
@@ -956,6 +987,9 @@ Part A: CNN Feature Extractor (uint8)     Part B: Transformer Encoder + LM Head 
 | XLS-R 12L nopad10_ma | 한국어 | (미테스트) | — | — | — | **128MB** | 3초 | 12/24 layers, nopad10 |
 | **XLS-R 12L opset12+sim MA** | 한국어 | **(미테스트)** | — | — | — | **121MB** | 3초 | **opset12 re-export, 729nodes, 0 Shape** |
 | base-korean **opset12+sim int16** | 한국어 | **(미테스트)** | — | — | — | **153MB** | 3초 | **int16 DFP — opset12에서 NB 생성 성공!** |
+| base-korean **clean int16** | 한국어 | **(미테스트)** | — | — | — | **153MB** | 3초 | **nopad 없는 순수 int16, sim=FP32=PyTorch 동일** |
+| base-korean **split CNN uint8** | 한국어 | **(미테스트)** | — | — | — | **3.7MB** | 3초 | CNN feature extractor만, 합계 143MB |
+| base-korean **split Transformer int16** | 한국어 | **(미테스트)** | — | — | — | **139MB** | 3초 | Transformer만, CNN과 체인 |
 | base-korean int16 (opset14) | 한국어 | ~0%* | — | (미확인) | — | NB 생성 실패 | 3초 | *시뮬레이션 98.7% FP32 일치, gen_nbg segfault |
 
 ### 9.2 분석
@@ -974,8 +1008,9 @@ Part A: CNN Feature Extractor (uint8)     Part B: Transformer Encoder + LM Head 
 5. **핵심 발견: Transformer 모델의 uint8 양자화 한계**
    - CNN 기반(KoCitrinet): int8 양자화로 FP32 대비 CER +0.33%p 열화 → **양자화 적합**
    - Transformer 기반(Wav2Vec2): 영어(12L, vocab 32)만 uint8 성공, 한국어(12L 또는 24L)는 **ALL PAD로 완전 실패**
-   - int16 양자화만이 Transformer에서 정상 동작(98.7~100% 일치)하나, T527 NPU의 int16 지원 제한(shader 컴파일 문제, NPU hang)으로 **실용화 불가**
-   - **잠정 결론: Phase 3-4 (opset12 re-export) NPU 테스트가 최종 판단 근거.** int16 DFP가 시뮬레이션에서 FP32 수준이므로, NPU에서도 동작한다면 한국어 STT 가능. 실패 시 CNN 기반(KoCitrinet)이 유일한 선택지
+   - int16 양자화만이 Transformer에서 정상 동작(100% 일치, PyTorch/Pegasus FP32/int16 모두 동일). 8-bit은 동적 범위 46% 손실로 근본적 부적합
+   - **잠정 결론: 디바이스 전원 리셋 후 int16 DFP NB (153MB) NPU 테스트가 최종 판단.** 시뮬레이션에서 FP32와 완벽히 동일하므로, NPU에서 동작하면 한국어 STT 가능 (FP32 모델 자체가 합리적 수준의 한국어 출력). 실패 시 CNN 기반(KoCitrinet)이 유일한 선택지
+   - **자동 테스트**: `auto_test_on_connect.sh` 가 백그라운드 실행 중, 디바이스 연결 시 자동으로 우선순위 NB들 테스트 → `auto_test_log.txt`에 결과 기록
 
 ### 9.3 NPU 성능 비교 (타 플랫폼)
 
