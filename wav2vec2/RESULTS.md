@@ -659,11 +659,32 @@ Shape → Gather → Unsqueeze → Concat → Reshape  (한국어: 24세트, 영
 
 단순화 후 한국어 모델의 연산 구성이 영어 모델과 거의 동일해짐.
 
+#### Pegasus import 비교
+
+Pegasus import 후 내부 그래프 구조도 차이를 보인다:
+
+| 항목 | 원본 ONNX (동적ops) | onnxsim 후 |
+|------|---------------------|-----------|
+| Pegasus 총 레이어 | 494 | **465** (-29) |
+| **variable 레이어** | **24** | **1** (-23) |
+| permute 레이어 | 53 | 49 (-4) |
+| reshape 레이어 | 199 | 197 (-2) |
+
+**`variable` 레이어가 핵심 차이.** Pegasus는 ONNX의 Shape→Gather→Concat 패턴을 `variable` 레이어로 변환한다. 이 `variable` 레이어는 런타임에 텐서 shape을 동적으로 계산하는 역할을 하며, T527 NPU의 `gen_nbg` 컴파일러가 이를 올바르게 처리하지 못할 가능성이 높다.
+
+Acuity CPU 시뮬레이션에서는 `variable` 레이어를 소프트웨어로 정확히 실행하므로 FP32와 100% 일치하지만, NPU 하드웨어에서는 다른 실행 경로를 타면서 출력이 달라진다.
+
+#### ONNX 정확도 검증
+
+onnxsim 적용 전후 ONNX 모델의 출력을 비교:
+- **Non-PAD 토큰 max diff: 0.0** (완벽 보존)
+- PAD 토큰은 nopad10 적용으로 정확히 -10.0 차이
+
+onnxsim은 연산을 제거하는 것이 아니라, 동적 shape 연산을 **상수로 대체(constant folding)**하여 정확도를 완벽히 보존한다.
+
 #### 가설
 
-T527 NPU 컴파일러(gen_nbg)가 동적 shape 연산을 포함한 모델에서 올바른 NPU 코드를 생성하지 못할 가능성이 있다. Acuity 시뮬레이션에서는 CPU에서 동적 연산을 올바르게 처리하므로 100% FP32 일치를 달성하지만, NPU 하드웨어에서는 다른 실행 경로를 타면서 출력이 달라진다.
-
-onnxsim으로 동적 연산을 제거한 NB (`nopad10_sim_ma`)가 NPU에서 정상 동작한다면 이 가설이 입증된다.
+T527 NPU 컴파일러(gen_nbg)가 `variable` 레이어(동적 shape 연산)를 포함한 모델에서 올바른 NPU 코드를 생성하지 못한다. onnxsim으로 `variable` 레이어를 24→1로 감소시킨 NB (`nopad10_sim_ma`)가 NPU에서 정상 동작한다면 이 가설이 입증된다.
 
 #### 양자화 파라미터 비교
 
