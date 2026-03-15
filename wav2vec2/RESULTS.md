@@ -31,7 +31,7 @@
 | NPU CER | **17.52%** | ALL PAD (완전 실패) | ALL PAD / 가비지 (실패) |
 | NPU 추론 시간 | **715ms** / 5초 | 1,098ms / 3초 | **425ms** / 3초 |
 | RTF | **0.143** | 0.366 | **0.142** |
-| 양자화 시도 | 2종 (uint8 성공) | 1종 (uint8 실패) | **36종+ (전부 실패, opset12 미테스트)** |
+| 양자화 시도 | 2종 (uint8 성공) | 1종 (uint8 실패) | **43종+ (Phase 1-2 실패, Phase 3-4 미테스트)** |
 
 > **RTF (Real-Time Factor)** = 처리시간 ÷ 오디오길이. 1 미만이면 실시간보다 빠른 것.
 > T527 RTF 0.143은 RK3588 fp16 (0.15)과 유사하며, RTX A6000 fp16 (0.007)의 약 20배 느림.
@@ -768,7 +768,31 @@ def manual_attention_forward(self, hidden_states, ...):
 | 39 | nopad10_opset12_sim_hybrid_ma | 72MB | 1 | opset12+sim + hybrid (attention bf16) |
 | 40 | nopad10_opset12_sim_int16 | **153MB** | 1 | **int16 DFP — 이전 opset14에서 segfault났던 것이 opset12+sim에서 성공!** |
 
-**총 40종+ 변형 생성 완료. 디바이스 FEL 모드로 전체 NPU 테스트 대기중.**
+| 41 | nopad10_opset12_sim_int8 | 72MB | 1 | opset12+sim + signed int8 |
+| 42 | nopad10_opset12_sim_ma96 | 72MB | 1 | opset12+sim + MA + 96 calibration samples |
+
+**총 42종+ 변형 생성 완료. 디바이스 FEL 모드로 전체 NPU 테스트 대기중.**
+
+#### Pegasus CPU 시뮬레이션 비교 (opset12+sim 모델, 동일 입력)
+
+| 양자화 | PAD/149 | 상위3 토큰 | 디코드 텍스트 (처음 40자) | 평가 |
+|--------|---------|-----------|------------------------|------|
+| **FP32** (기준) | **34** | [PAD]:34, 공백:32, ㅇ:17 | ㅇㅣㅣㄱㅡㄴㅇㅡㄴ ㄱㅙㄴ ㅊㅏㄹㄴㅇㅡㄴ ㅈㅓㅇㄱ | 기준 |
+| **int16 DFP** | **32** | 공백:35, [PAD]:32, ㅇ:15 | ㅇㅣㅣㄱㅡㄴㅇㅡㄴ ㄱㅙㄴ ㅊㅏㄹㄴㅇㅡㄴ ㅈㅓㄱ | **FP32와 거의 동일** |
+| uint8 MA (24cal) | 0 | 공백:47, ㅇ:35, ㅏ:17 | ㅇㄱㅡㄴㅇㅡㄴ ㅇ ㅇㄱㅐㅇㄹ ㅊㅏㄹㄴㅇㅡ | 열화 있으나 유의미 |
+| int8 | 0 | 공백:47, ㅇ:35, ㅏ:17 | ㅇㄱㅡㄴㅇㅡㄴ ㅇ ㅇㄱㅐㅇㄹ ㅊㅏㄹㄴㅇㅡ | uint8 MA와 동일 |
+| Hybrid MA | 0 | 공백:47, ㅇ:35, ㅏ:17 | ㅇㄱㅡㄴㅇㅡㄴ ㅇ ㅇㄱㅐㅇㄹ ㅊㅏㄹㄴㅇㅡ | uint8 MA와 동일 |
+| KL divergence | 0 | 공백:50, ㅇ:37, ㄱ:13 | ㅇㄱㅇㄱ ㄱㅡㄴㅇㅡㅇ ㅇ ㄱㅚㅕㄴ | MA보다 약간 나쁨 |
+| Normal | 0 | ㅇ:68, 공백:39, ㅏ:8 | ㅇ ㅇㄱㅡㄹㅇㅐ ㅇ ㅇㅡ ㄹㄱㅇㅐ | 가장 나쁨 |
+| MA (96cal aug) | 0 | ㅇ:60, 공백:48, ㅏ:16 | ㅇㅡㅇㄱㅡㄹㅇㅐ ㅇ ㅇ ㅇㅔ | 증강 데이터로 오히려 악화 |
+| 6L uint8 MA | 0 | ㅏ:20, ㅡ:14, ㅣ:11 | ㅣㅂㅟㅣㅅㅡㅐㅜㅂㅕ... | 6-layer: 완전 쓰레기 |
+| ReLU uint8 MA | 0 | ㅇ:122, ㄴ:26, ㅅ:1 | ㅇㄴㅇㄴㅇㄴㅇㅅㅇㄴ... | GELU→ReLU: 완전 실패 |
+
+**핵심 결론:**
+- **int16 DFP가 압도적** — FP32와 거의 동일한 출력, PAD 토큰도 정상 분포
+- uint8 MA/int8/Hybrid는 열화 있지만 일관된 한국어 텍스트 출력
+- 6-layer, ReLU 변형은 시뮬레이션에서도 실패 → NPU 테스트 불필요
+- 추가 calibration (96샘플 증강)은 오히려 품질 저하
 
 #### 중요 발견: int16 NB 생성 성공
 
@@ -782,7 +806,45 @@ def manual_attention_forward(self, hidden_states, ...):
 4. **#34 (6L_nopad10_opset12_sim_ma)** — 39MB, 속도 우선
 5. **#36 (6L_relu_nopad10_opset12_sim_ma)** — 최소 모델, 양자화 내성 최대화
 
-### 8.12 결론 및 교훈
+### 8.12 XLS-R-300M Opset 12 Re-export
+
+base-korean 모델에서 성공한 opset 12 re-export 기법을 XLS-R-300M에도 적용:
+
+```
+kresnik/wav2vec2-large-xlsr-korean
+→ 316.7M params, 24 layers, 1024 hidden, 16 heads
+→ Vocab: 1205 (한국어 음절 단위, base-korean의 56 자모와 다름)
+→ 12-layer pruning + manual attention + opset 12 + onnxsim
+→ 729 nodes, 0 Shape ops → 121MB uint8 NB
+```
+
+| # | 변형 | NB 크기 | 설명 |
+|---|------|---------|------|
+| 43 | XLS-R 12L nopad10_opset12_sim_ma | **121MB** | 12-layer + opset12 + sim + MA |
+| (기존) | XLS-R nopad10_ma | 249MB | opset14 원본, ALL PAD |
+| (기존) | XLS-R 12L nopad10_ma | 128MB | opset14, 12-layer, ALL PAD |
+
+**Pegasus CPU 시뮬레이션 (XLS-R 12L opset12+sim):**
+
+| 양자화 | PAD/149 | 상위 토큰 | 디코드 텍스트 |
+|--------|---------|-----------|-------------|
+| FP32 | 0 | \|:83, 내:5, 그:5 | 미인 육몇역 그 내 려용 약낮악날학 직기치이 들서 |
+| uint8 MA | 0 | \|:72, 더:5, 인:5 | 인 인 인 런 르숙여더석갖 실 그 내대내거 이용유 |
+
+> \| 토큰은 단어 경계(space) 역할. FP32에서 83회, uint8에서 72회 — 합리적인 분포.
+> 음절 단위 출력으로 base-korean (자모 단위)보다 직관적이나, 12-layer 축소로 정확도 저하.
+
+### 8.13 추가 시도 (실패)
+
+| 접근 | 결과 | 이유 |
+|------|------|------|
+| SmoothQuant (alpha=0.1~0.5) | FP32에서도 빈 출력 | LayerNorm 스케일링이 wav2vec2에 부적합 |
+| Temperature scaling (T=2.0) | FP32 텍스트 변경, uint8 품질 악화 | attention smoothing이 역효과 |
+| PCQ (per-channel int8) on opset12+sim | gen_nbg segfault | T527 gen_nbg가 perchannel_symmetric_affine 미지원 |
+| vsimulator NB 직접 실행 | double free crash | x86 소프트웨어 시뮬레이터 한계 |
+| 추가 calibration (96샘플 증강) | uint8 품질 오히려 악화 | 증강 데이터가 원본 분포 왜곡 |
+
+### 8.14 결론 및 교훈
 
 1. **base 아키텍처(94M, 12L)도 한국어 wav2vec2는 uint8 양자화 실패** — 영어 base-960h(CER 17.52%)와 동일 구조임에도 실패. vocab이 작아(56 vs 32) 양자화에 유리할 것으로 예상했으나, Transformer의 양자화 오류 누적은 vocab 크기와 무관하게 발생.
 
@@ -792,13 +854,14 @@ def manual_attention_forward(self, hidden_states, ...):
 
 4. **int16만이 유효** — 시뮬레이션에서 98.7% FP32 일치. 그러나 T527 NPU의 int16 지원 제한(shader 컴파일 문제, NPU hang 가능성)으로 실용화에 장벽.
 
-5. **시도한 36종+ 양자화/모델 변형 전략 요약:**
-   - ✅ 성공: 없음 (NPU에서 의미 있는 한국어 텍스트 출력 불가, 디바이스 FEL 모드로 Phase 3-4 미테스트)
-   - ⚠️ 부분 성공: nopad10_ma (non-PAD 출력, 그러나 81% ㅇ 토큰)
-   - ❌ 양자화 실패 (Phase 1-2): uint8, PCQ, DFP, symmetric, bf16, int16, hybrid, MLE, GELU→ReLU, 6-layer pruning, CNN-only, temp scaling
-   - ❌ NB 생성 불가: bf16 (segfault), int16 (segfault), DFP (NPU 미지원), symmetric (gen_nbg error)
+5. **시도한 43종+ 양자화/모델 변형 전략 요약:**
+   - ✅ 성공: 없음 (디바이스 FEL 모드로 Phase 3-4 NPU 미테스트)
+   - ⚠️ 시뮬레이션 유망: int16 DFP (FP32와 거의 동일), uint8 MA/int8/Hybrid (열화 있지만 유의미)
+   - ⚠️ 부분 성공: nopad10_ma (NPU non-PAD 출력, 81% ㅇ 토큰)
+   - ❌ 시뮬레이션 실패: 6L, ReLU, SmoothQuant, Temperature scaling, MA 96-cal 증강
+   - ❌ NB 생성 불가: bf16, int16(opset14), PCQ, symmetric (gen_nbg segfault)
    - 🔍 **미테스트 (Phase 3):** onnxsim으로 동적 연산 제거한 NB 4종
-   - 🔍 **미테스트 (Phase 4, 최우선):** opset 12 re-export 5종 — 동적 연산의 근본 원인(SDPA) 제거
+   - 🔍 **미테스트 (Phase 4, 최우선):** opset 12 re-export NB 10종 + XLS-R 12L opset12 NB 1종
 
 6. **ONNX 동적 연산 차이 발견** — 한국어 모델은 **opset 14** (SDPA)로 export되어 attention에서 Shape→Gather→Concat→Reshape 동적 패턴(349개 추가 노드)을 생성. 영어 모델은 **opset 12** (수동 attention)로 export되어 static Reshape만 사용. `onnxsim`으로 동적 연산 제거 시 627노드 감소(1306→679). **opset 12로 re-export하면 근본적으로 동적 연산이 발생하지 않음** (849 nodes, Shape 1).
 
@@ -828,6 +891,7 @@ def manual_attention_forward(self, hidden_states, ...):
 | base-korean opset12+sim 6L ReLU | 한국어 | (미테스트) | — | — | — | **39MB** | 3초 | 최소 모델 (6L+ReLU) |
 | XLS-R nopad10_ma | 한국어 | (미테스트) | — | — | — | 249MB | 3초 | 300M, nopad10 + MA |
 | XLS-R 12L nopad10_ma | 한국어 | (미테스트) | — | — | — | **128MB** | 3초 | 12/24 layers, nopad10 |
+| **XLS-R 12L opset12+sim MA** | 한국어 | **(미테스트)** | — | — | — | **121MB** | 3초 | **opset12 re-export, 729nodes, 0 Shape** |
 | base-korean **opset12+sim int16** | 한국어 | **(미테스트)** | — | — | — | **153MB** | 3초 | **int16 DFP — opset12에서 NB 생성 성공!** |
 | base-korean int16 (opset14) | 한국어 | ~0%* | — | (미확인) | — | NB 생성 실패 | 3초 | *시뮬레이션 98.7% FP32 일치, gen_nbg segfault |
 
@@ -848,7 +912,7 @@ def manual_attention_forward(self, hidden_states, ...):
    - CNN 기반(KoCitrinet): int8 양자화로 FP32 대비 CER +0.33%p 열화 → **양자화 적합**
    - Transformer 기반(Wav2Vec2): 영어(12L, vocab 32)만 uint8 성공, 한국어(12L 또는 24L)는 **ALL PAD로 완전 실패**
    - int16 양자화만이 Transformer에서 정상 동작(98.7~100% 일치)하나, T527 NPU의 int16 지원 제한(shader 컴파일 문제, NPU hang)으로 **실용화 불가**
-   - **결론: T527 NPU에서 한국어 STT는 CNN 기반 모델(KoCitrinet 등)이 유일한 선택지**
+   - **잠정 결론: Phase 3-4 (opset12 re-export) NPU 테스트가 최종 판단 근거.** int16 DFP가 시뮬레이션에서 FP32 수준이므로, NPU에서도 동작한다면 한국어 STT 가능. 실패 시 CNN 기반(KoCitrinet)이 유일한 선택지
 
 ### 9.3 NPU 성능 비교 (타 플랫폼)
 
