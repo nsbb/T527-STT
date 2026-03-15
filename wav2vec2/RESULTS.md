@@ -31,7 +31,7 @@
 | NPU CER | **17.52%** | ALL PAD (완전 실패) | ALL PAD / 가비지 (실패) |
 | NPU 추론 시간 | **715ms** / 5초 | 1,098ms / 3초 | **425ms** / 3초 |
 | RTF | **0.143** | 0.366 | **0.142** |
-| 양자화 시도 | 2종 (uint8 성공) | 1종 (uint8 실패) | **31종+ (전부 실패, onnxsim 미테스트)** |
+| 양자화 시도 | 2종 (uint8 성공) | 1종 (uint8 실패) | **36종+ (전부 실패, opset12 미테스트)** |
 
 > **RTF (Real-Time Factor)** = 처리시간 ÷ 오디오길이. 1 미만이면 실시간보다 빠른 것.
 > T527 RTF 0.143은 RK3588 fp16 (0.15)과 유사하며, RTX A6000 fp16 (0.007)의 약 20배 느림.
@@ -710,7 +710,79 @@ Phase 3에서 생성한 추가 NB 변형:
 
 **최우선 테스트 대상: #27 (nopad10_sim_ma)** — onnxsim으로 동적 연산을 제거한 유일한 변형.
 
-### 8.11 결론 및 교훈
+### 8.11 Phase 4: Opset 12 Re-export — 근본적 해결 시도
+
+#### 핵심 발견: Opset 차이가 동적 연산의 원인
+
+분석 결과 **영어 모델은 opset 12**, **한국어 모델은 opset 14**로 export되어 있었다:
+
+| 속성 | 영어 (base-960h) | 한국어 (base-korean) |
+|------|-------------------|---------------------|
+| ONNX Opset | **12** | **14** |
+| ONNX 노드 수 | 957 | 1,306 |
+| 동적 Shape ops | 1 | 37 |
+| Pegasus variable layers | **12** | **24** |
+| NPU 동작 | **성공** | **실패** |
+
+Opset 14에서 추가된 `aten::scaled_dot_product_attention` (SDPA)이 export 시 동적 Shape→Gather→Concat→Reshape 패턴을 생성한다. Opset 12에서는 수동 attention 구현이 사용되어 정적 Reshape만 생성된다.
+
+#### 해결: 수동 Attention으로 Opset 12 Re-export
+
+HuggingFace transformers의 `Wav2Vec2SdpaAttention.forward()`를 수동 attention 구현으로 monkey-patch하여 opset 12 export에 성공:
+
+```python
+# SDPA → Manual attention (opset 12 호환)
+def manual_attention_forward(self, hidden_states, ...):
+    bsz, tgt_len, _ = hidden_states.size()
+    q = self.q_proj(hidden_states).view(bsz, tgt_len, self.num_heads, self.head_dim).transpose(1, 2)
+    k = self.k_proj(hidden_states).view(bsz, tgt_len, self.num_heads, self.head_dim).transpose(1, 2)
+    v = self.v_proj(hidden_states).view(bsz, tgt_len, self.num_heads, self.head_dim).transpose(1, 2)
+    w = torch.matmul(q, k.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
+    w = F.softmax(w, dim=-1)
+    o = torch.matmul(w, v).transpose(1, 2).contiguous().view(bsz, tgt_len, self.embed_dim)
+    return self.out_proj(o), None, None
+```
+
+결과 비교:
+
+| 속성 | 원본 (opset 14) | Opset 12 Re-export | Opset 12 + onnxsim |
+|------|----------------|--------------------|--------------------|
+| ONNX 노드 수 | 1,306 | **849** | **667** |
+| Shape ops | 37 | **1** | **0** |
+| Gather ops | 24 | **0** | **0** |
+| Concat ops | 48 | **0** | **0** |
+| Pegasus variable layers | 24 | **12** | **1** |
+| 정확도 (vs 원본) | 기준 | max diff 0.000067 | 동일 |
+
+#### Phase 4 NB 변형 목록
+
+| # | 변형 | NB 크기 | 변수 레이어 | 설명 |
+|---|------|---------|-----------|------|
+| 32 | nopad10_opset12_ma | 72MB | 12 | opset12 re-export + nopad10 + MA |
+| 33 | nopad10_opset12_sim_ma | 72MB | **1** | opset12 + onnxsim + nopad10 + MA |
+| 34 | 6L_nopad10_opset12_sim_ma | **39MB** | 1 | 6-layer pruning + opset12 + sim |
+| 35 | relu_nopad10_opset12_sim_ma | 72MB | 1 | GELU→ReLU + opset12 + sim |
+| 36 | 6L_relu_nopad10_opset12_sim_ma | **39MB** | 1 | 6L + ReLU + opset12 + sim (최소 모델) |
+| 37 | nopad10_opset12_sim_normal | 72MB | 1 | opset12+sim + normal quantization |
+| 38 | nopad10_opset12_sim_kl | 72MB | 1 | opset12+sim + KL divergence |
+| 39 | nopad10_opset12_sim_hybrid_ma | 72MB | 1 | opset12+sim + hybrid (attention bf16) |
+| 40 | nopad10_opset12_sim_int16 | **153MB** | 1 | **int16 DFP — 이전 opset14에서 segfault났던 것이 opset12+sim에서 성공!** |
+
+**총 40종+ 변형 생성 완료. 디바이스 FEL 모드로 전체 NPU 테스트 대기중.**
+
+#### 중요 발견: int16 NB 생성 성공
+
+원본 opset14 모델에서는 int16 NB 생성 시 gen_nbg segfault로 실패했으나, **opset12+sim 모델에서는 153MB int16 NB 생성에 성공**했다. 이는 동적 연산 제거가 NB 컴파일 안정성에도 영향을 미친다는 증거다. int16은 uint8보다 Transformer 모델에 훨씬 적합하므로, 이 NB가 NPU에서 동작한다면 가장 높은 정확도를 기대할 수 있다.
+
+#### 테스트 우선순위
+
+1. **#33 (nopad10_opset12_sim_ma)** — 1 variable layer, 가장 깨끗한 12-layer 모델
+2. **#32 (nopad10_opset12_ma)** — 12 variable layers (영어와 동일 수), 정확도 보존
+3. **#27 (nopad10_sim_ma)** — 원본 opset14에서 onnxsim 적용
+4. **#34 (6L_nopad10_opset12_sim_ma)** — 39MB, 속도 우선
+5. **#36 (6L_relu_nopad10_opset12_sim_ma)** — 최소 모델, 양자화 내성 최대화
+
+### 8.12 결론 및 교훈
 
 1. **base 아키텍처(94M, 12L)도 한국어 wav2vec2는 uint8 양자화 실패** — 영어 base-960h(CER 17.52%)와 동일 구조임에도 실패. vocab이 작아(56 vs 32) 양자화에 유리할 것으로 예상했으나, Transformer의 양자화 오류 누적은 vocab 크기와 무관하게 발생.
 
@@ -720,17 +792,17 @@ Phase 3에서 생성한 추가 NB 변형:
 
 4. **int16만이 유효** — 시뮬레이션에서 98.7% FP32 일치. 그러나 T527 NPU의 int16 지원 제한(shader 컴파일 문제, NPU hang 가능성)으로 실용화에 장벽.
 
-5. **시도한 26종+ 양자화/모델 변형 전략 요약:**
-   - ✅ 성공: 없음 (NPU에서 의미 있는 한국어 텍스트 출력 불가)
+5. **시도한 36종+ 양자화/모델 변형 전략 요약:**
+   - ✅ 성공: 없음 (NPU에서 의미 있는 한국어 텍스트 출력 불가, 디바이스 FEL 모드로 Phase 3-4 미테스트)
    - ⚠️ 부분 성공: nopad10_ma (non-PAD 출력, 그러나 81% ㅇ 토큰)
-   - ❌ 양자화 실패: uint8, PCQ, DFP, symmetric, bf16, int16, hybrid, MLE
-   - ❌ 모델 수술: GELU→ReLU, 6-layer pruning, CNN-only, temp scaling (모두 NB 생성 성공, NPU 미테스트)
+   - ❌ 양자화 실패 (Phase 1-2): uint8, PCQ, DFP, symmetric, bf16, int16, hybrid, MLE, GELU→ReLU, 6-layer pruning, CNN-only, temp scaling
    - ❌ NB 생성 불가: bf16 (segfault), int16 (segfault), DFP (NPU 미지원), symmetric (gen_nbg error)
-   - 🔍 **미테스트 (최우선):** onnxsim으로 동적 연산 제거한 NB (`nopad10_sim_ma`) — 디바이스 FEL 모드로 테스트 불가
+   - 🔍 **미테스트 (Phase 3):** onnxsim으로 동적 연산 제거한 NB 4종
+   - 🔍 **미테스트 (Phase 4, 최우선):** opset 12 re-export 5종 — 동적 연산의 근본 원인(SDPA) 제거
 
-7. **ONNX 동적 연산 차이 발견** — 한국어 모델은 attention에서 Shape→Gather→Concat→Reshape 동적 패턴(349개 추가 노드)을 사용하고, 영어 모델은 static Reshape만 사용. `onnxsim`으로 동적 연산 제거 시 627노드 감소(1306→679). 이것이 NPU 실패의 근본 원인일 가능성 — 디바이스 복구 후 검증 필요.
+6. **ONNX 동적 연산 차이 발견** — 한국어 모델은 **opset 14** (SDPA)로 export되어 attention에서 Shape→Gather→Concat→Reshape 동적 패턴(349개 추가 노드)을 생성. 영어 모델은 **opset 12** (수동 attention)로 export되어 static Reshape만 사용. `onnxsim`으로 동적 연산 제거 시 627노드 감소(1306→679). **opset 12로 re-export하면 근본적으로 동적 연산이 발생하지 않음** (849 nodes, Shape 1).
 
-6. **Wav2Vec2 Transformer는 T527 uint8 양자화에 근본적으로 부적합** — attention score의 softmax, layer normalization 등 정밀도에 민감한 연산이 uint8의 256단계 해상도로 표현 불가. CNN 기반 KoCitrinet(CER 44.44%)이 같은 NPU에서 정상 동작하는 것과 대조적.
+7. **Wav2Vec2 Transformer는 T527 uint8 양자화에 근본적으로 부적합할 가능성** — attention score의 softmax, layer normalization 등 정밀도에 민감한 연산이 uint8의 256단계 해상도로 표현 불가. 단, opset12 re-export로 동적 연산을 제거한 모델은 미테스트 — 동적 연산이 원인이라면 해결 가능. CNN 기반 KoCitrinet(CER 44.44%)이 같은 NPU에서 정상 동작하는 것과 대조적.
 
 ---
 
@@ -749,9 +821,15 @@ Phase 3에서 생성한 추가 NB 변형:
 | base-korean CNN-only | 한국어 | (미테스트) | — | — | — | **3MB** | 3초 | Transformer 완전 제거 |
 | base-korean **onnxsim** nopad10_ma | 한국어 | **(미테스트)** | — | — | — | 72MB | 3초 | **동적ops 제거 — 최우선 테스트** |
 | base-korean combo_sim | 한국어 | (미테스트) | — | — | — | ~38MB | 3초 | onnxsim + ReLU + 6L |
+| base-korean **opset12** nopad10_ma | 한국어 | **(미테스트)** | — | — | — | 72MB | 3초 | **opset12 re-export, var 12** |
+| base-korean **opset12+sim** nopad10_ma | 한국어 | **(미테스트)** | — | — | — | 72MB | 3초 | **opset12+onnxsim, var 1 — 최우선** |
+| base-korean opset12+sim 6L | 한국어 | (미테스트) | — | — | — | **39MB** | 3초 | 6-layer + opset12 + sim |
+| base-korean opset12+sim ReLU | 한국어 | (미테스트) | — | — | — | 72MB | 3초 | ReLU + opset12 + sim |
+| base-korean opset12+sim 6L ReLU | 한국어 | (미테스트) | — | — | — | **39MB** | 3초 | 최소 모델 (6L+ReLU) |
 | XLS-R nopad10_ma | 한국어 | (미테스트) | — | — | — | 249MB | 3초 | 300M, nopad10 + MA |
 | XLS-R 12L nopad10_ma | 한국어 | (미테스트) | — | — | — | **128MB** | 3초 | 12/24 layers, nopad10 |
-| base-korean int16 (sim) | 한국어 | ~0%* | — | (미확인) | — | NB 생성 실패 | 3초 | *시뮬레이션 98.7% FP32 일치 |
+| base-korean **opset12+sim int16** | 한국어 | **(미테스트)** | — | — | — | **153MB** | 3초 | **int16 DFP — opset12에서 NB 생성 성공!** |
+| base-korean int16 (opset14) | 한국어 | ~0%* | — | (미확인) | — | NB 생성 실패 | 3초 | *시뮬레이션 98.7% FP32 일치, gen_nbg segfault |
 
 ### 9.2 분석
 
