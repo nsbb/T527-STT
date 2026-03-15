@@ -787,11 +787,10 @@ def manual_attention_forward(self, hidden_states, ...):
 
 | 양자화 | PAD/149 | 상위3 토큰 | 디코드 텍스트 (처음 40자) | 평가 |
 |--------|---------|-----------|------------------------|------|
-| **FP32** (기준) | **34** | [PAD]:34, 공백:32, ㅇ:17 | ㅇㅣㅣㄱㅡㄴㅇㅡㄴ ㄱㅙㄴ ㅊㅏㄹㄴㅇㅡㄴ ㅈㅓㅇㄱ | 기준 |
-| **int16 DFP** | **32** | 공백:35, [PAD]:32, ㅇ:15 | ㅇㅣㅣㄱㅡㄴㅇㅡㄴ ㄱㅙㄴ ㅊㅏㄹㄴㅇㅡㄴ ㅈㅓㄱ | **FP32와 거의 동일** |
-| uint8 MA (24cal) | 0 | 공백:47, ㅇ:35, ㅏ:17 | ㅇㄱㅡㄴㅇㅡㄴ ㅇ ㅇㄱㅐㅇㄹ ㅊㅏㄹㄴㅇㅡ | 열화 있으나 유의미 |
-| int8 | 0 | 공백:47, ㅇ:35, ㅏ:17 | ㅇㄱㅡㄴㅇㅡㄴ ㅇ ㅇㄱㅐㅇㄹ ㅊㅏㄹㄴㅇㅡ | uint8 MA와 동일 |
-| Hybrid MA | 0 | 공백:47, ㅇ:35, ㅏ:17 | ㅇㄱㅡㄴㅇㅡㄴ ㅇ ㅇㄱㅐㅇㄹ ㅊㅏㄹㄴㅇㅡ | uint8 MA와 동일 |
+| **FP32** (기준) | **34** | [PAD]:34, 공백:32, ㅇ:17 | ㅇㅣㅣㄱㅡㄴㅇㅡㄴ ㄱㅙㄴ ㅊㅏㄹㄴㅇㅡㄴ ㅈㅓㅇㄱ | 기준, logits [-10.1, 11.7] |
+| **int16 DFP** | **16** | 공백:38, ㅇ:29, [PAD]:16 | ㅇㅣㅇㅣ ㄱㅡㄴㅇㅡㄴ ㅇ ㄱㅙㄴ ㅊㅏㄹㄴㅇㅡㄴ ㅈㅓㄱ | **FP32와 거의 동일**, logits [-10.0, 11.6] |
+| uint8 MA (24cal) | **0** | ㅇ:60, 공백:48, ㅏ:16 | ㅇㅡㅇㄱㅡㄹㅇㅐ ㅇ ㅇ ㅇㅔ ㅌㅔㅏ | **logits [-6.4, 6.2] — 동적 범위 46% 손실** |
+| int8 MA | **0** | ㅇ:60, 공백:48, ㅏ:16 | ㅇㅡㅇㄱㅡㄹㅇㅐ ㅇ ㅇ ㅇㅔ ㅌㅔㅏ | uint8 MA와 동일 (8bit 한계) |
 | KL divergence | 0 | 공백:50, ㅇ:37, ㄱ:13 | ㅇㄱㅇㄱ ㄱㅡㄴㅇㅡㅇ ㅇ ㄱㅚㅕㄴ | MA보다 약간 나쁨 |
 | Normal | 0 | ㅇ:68, 공백:39, ㅏ:8 | ㅇ ㅇㄱㅡㄹㅇㅐ ㅇ ㅇㅡ ㄹㄱㅇㅐ | 가장 나쁨 |
 | MA (96cal aug) | 0 | ㅇ:60, 공백:48, ㅏ:16 | ㅇㅡㅇㄱㅡㄹㅇㅐ ㅇ ㅇ ㅇㅔ | 증강 데이터로 오히려 악화 |
@@ -802,11 +801,19 @@ def manual_attention_forward(self, hidden_states, ...):
 | MA01 (weight 0.01) | 0 | ㅇ:60, 공백:48, ㅏ:16 | ㅇㅡㅇㄱㅡㄹㅇㅐ ㅇ ㅇ | MA과적합: 악화 |
 | symmetric int8 | 0 | ㅇ:77, 공백:34, ㅏ:18 | ㅇㅣㄹ ㄹㅇㅐ ㅇ ㅇ ㅇ | 최악, NB 생성도 실패 |
 
-**핵심 결론:**
-- **int16 DFP가 압도적** — FP32와 거의 동일한 출력, PAD 토큰도 정상 분포
-- uint8 MA/int8/Hybrid는 열화 있지만 일관된 한국어 텍스트 출력
+**핵심 결론 (수정된 시뮬레이션 분석):**
+
+**8-bit(uint8/int8) 양자화는 한국어 wav2vec2에 근본적으로 부적합:**
+- FP32 logit 동적 범위: **[-10.1, 11.7]** (범위 21.8)
+- uint8/int8 logit 범위: **[-6.4, 6.2]** (범위 12.6) — **동적 범위 46% 손실**
+- int16 DFP logit 범위: **[-10.0, 11.6]** (범위 21.6) — 동적 범위 99% 보존
+- 12개 Transformer layer의 양자화 오류가 누적되어, 8-bit에서는 최종 logit의 상대적 순서가 파괴됨
+- **int16 DFP만이 유효한 양자화 방식**
+
+추가 발견:
 - 6-layer, ReLU 변형은 시뮬레이션에서도 실패 → NPU 테스트 불필요
-- 추가 calibration (96샘플 증강)은 오히려 품질 저하
+- 추가 calibration (96샘플 증강, noise augmentation)은 오히려 품질 저하
+- 영어 audio로 calibration하면 완전 쓰레기 (오디오 분포 불일치)
 
 #### 중요 발견: int16 NB 생성 성공
 
@@ -865,8 +872,40 @@ kresnik/wav2vec2-large-xlsr-korean
 | symmetric_affine int8 | gen_nbg Fatal error 65280 | T527 gen_nbg가 symmetric quantizer 미지원 |
 | bf16 on opset12+sim | gen_nbg Fatal error 35584 | opset12에서도 bf16 NB 생성 불가 |
 | clip3s + int16 DFP | 시뮬레이션 FP32 동일 | NB 175MB, 동작 가능하나 clip3s 이점 미미 |
+| Noise-augmented calibration (72cal) | uint8 PAD 0/149, ㅇ:60 | noise가 activation range 왜곡 |
+| 영어 audio calibration (24cal) | uint8 PAD 5/149, 완전 쓰레기 | 오디오 분포 불일치 |
+| 혼합 calibration (96ko+24en) | uint8 PAD 0/149 | shared .data 오염 문제 |
 
-### 8.14 결론 및 교훈
+### 8.14 Split Model 접근 — CNN(uint8) + Transformer(int16)
+
+8-bit 양자화가 Transformer에 부적합하다는 분석을 바탕으로, 모델을 두 부분으로 분할:
+
+```
+Part A: CNN Feature Extractor (uint8)     Part B: Transformer Encoder + LM Head (int16)
+[audio 1×48000] → [features 1×149×768]   [features 1×149×768] → [logits 1×149×56]
+                    ↓                                               ↓
+            3.7MB NB (uint8)                              139MB NB (int16 DFP)
+```
+
+| 부분 | NB 크기 | 양자화 | 내용 |
+|------|---------|--------|------|
+| Part A (CNN) | **3.7MB** | uint8 | Conv1d×7 + GroupNorm + FeatureProjection + PosConv + LayerNorm |
+| Part B (Transformer, int16) | **139MB** | int16 DFP | Encoder×12 + LM Head |
+| Part B (Transformer, uint8) | **69MB** | uint8 | Encoder×12 + LM Head (비교용) |
+| **합계 (A+B int16)** | **143MB** | 혼합 | uint8 CNN + int16 Transformer |
+
+**장점:**
+1. CNN feature extractor는 uint8에 안전 — activation range [-1.4, 1.9]로 작음
+2. Transformer만 int16 사용 → CNN의 빠른 uint8 추론 활용
+3. 총 크기 143MB — 단일 int16 NB (153MB)보다 약간 작음
+4. Part B uint8 (69MB)로 "빠르지만 부정확한" 모드도 가능
+
+**제한:**
+- 두 번의 NPU 추론 필요 (Part A → 중간 텐서 변환 → Part B)
+- vpm_run 직접 체이닝 불가, 커스텀 코드 필요
+- 테스트 스크립트: `test_split_model.sh`
+
+### 8.15 결론 및 교훈
 
 1. **base 아키텍처(94M, 12L)도 한국어 wav2vec2는 uint8 양자화 실패** — 영어 base-960h(CER 17.52%)와 동일 구조임에도 실패. vocab이 작아(56 vs 32) 양자화에 유리할 것으로 예상했으나, Transformer의 양자화 오류 누적은 vocab 크기와 무관하게 발생.
 
@@ -874,11 +913,13 @@ kresnik/wav2vec2-large-xlsr-korean
 
 3. **nopad 트릭의 한계** — nopad10으로 모든 프레임 non-PAD 달성, 그러나 FP32와의 상관계수 r=0.56 (약한 양의 상관)에 불과. 출력의 81%가 단일 토큰(ㅇ)으로, 의미 있는 한국어 텍스트 불가.
 
-4. **int16만이 유효** — 시뮬레이션에서 98.7% FP32 일치. 그러나 T527 NPU의 int16 지원 제한(shader 컴파일 문제, NPU hang 가능성)으로 실용화에 장벽.
+4. **int16만이 유효** — 시뮬레이션에서 FP32 logit 범위 99% 보존 ([-10.0, 11.6] vs [-10.1, 11.7]). uint8은 동적 범위 46% 손실 ([-6.4, 6.2]). 8-bit 양자화가 12개 Transformer layer를 거치며 오류가 누적되어 최종 logit의 상대적 순서 파괴.
 
-5. **시도한 47종+ 양자화/모델 변형 전략 요약:**
+5. **Split model 접근** — CNN(uint8, 3.7MB) + Transformer(int16, 139MB) 분할로 최적 정밀도 배분. CNN feature extractor는 activation range가 작아(-1.4~1.9) uint8에 안전하고, Transformer만 int16 사용.
+
+6. **시도한 50종+ 양자화/모델 변형 전략 요약:**
    - ✅ 성공: 없음 (디바이스 FEL 모드로 Phase 3-4 NPU 미테스트)
-   - ⚠️ 시뮬레이션 유망: int16 DFP (FP32와 거의 동일), uint8 MA/int8/Hybrid (열화 있지만 유의미)
+   - ⚠️ 시뮬레이션 유망: int16 DFP (FP32와 거의 동일), split model (CNN uint8 + Transformer int16)
    - ⚠️ 부분 성공: nopad10_ma (NPU non-PAD 출력, 81% ㅇ 토큰)
    - ❌ 시뮬레이션 실패: 6L, 8L, 10L, ReLU, SmoothQuant, Temperature scaling, MA 96-cal 증강, weight clip(uint8), symmetric int8
    - ❌ NB 생성 불가: bf16(opset12/14), int16(opset14), PCQ, symmetric_affine (gen_nbg segfault/error)
