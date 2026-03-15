@@ -1,0 +1,42 @@
+{
+    "Inputs": {
+        "x_1": {
+            "name": "x",
+            "shape": [
+                1,
+                756,
+                161,
+                1
+            ],
+            "format": "nhwc",
+            "quantizer": "asymmetric_affine",
+            "quantize": {
+                "qtype": "u8",
+                "max_value": 2.843154191970825,
+                "min_value": 0.0,
+                "scale": 0.011149624362587929,
+                "zero_point": 0
+            }
+        }
+    },
+    "Outputs": {
+        "attach_logits/BiasAdd/out0_0": {
+            "name": "attach_logits/BiasAdd/out0",
+            "shape": [
+                1,
+                378,
+                29
+            ],
+            "format": "nhwc",
+            "quantizer": "asymmetric_affine",
+            "quantize": {
+                "qtype": "u8",
+                "max_value": 16.498676300048828,
+                "min_value": -27.296886444091797,
+                "scale": 0.17174731194972992,
+                "zero_point": 159
+            }
+        }
+    },
+    "Recurrent_connections": {}
+}
