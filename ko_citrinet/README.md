@@ -4,13 +4,17 @@ NVIDIA NeMo CitriNet 기반 한국어 STT 모델. T527 NPU int8 양자화.
 
 ## 성능
 
-| 평가 | CER | exact | 추론시간 | 샘플 수 |
-|------|-----|-------|----------|---------|
-| sample30 (mode7) | **44.44%** | 44/330 | 120ms | 330 |
-| sample30 (mode1) | 45.94% | 46/330 | 120ms | 330 |
-| sample30 (mode0) | 60.79% | 27/330 | 120ms | 330 |
-| ONNX FP32 (일반 100샘플) | 36.03% | — | — | 100 |
-| NB int8 (일반 100샘플) | 36.36% | — | — | 100 |
+| 평가 | 앱 | CER | exact | 추론시간 | 샘플 수 |
+|------|-----|-----|-------|----------|---------|
+| sample30 (mode7) | awaiasr_2 | **44.44%** | 44/330 | 120ms | 330 |
+| sample30 (mode1) | awaiasr_2 | 45.94% | 46/330 | 120ms | 330 |
+| sample30 (mode1) | bundle_app | 45.94% | 46/330 | 120ms | 330 |
+| sample30 (mode0) | awaiasr_2 | 60.79% | 27/330 | 120ms | 330 |
+| ONNX FP32 (일반 100샘플) | 서버 | 36.03% | — | — | 100 |
+| NB int8 (일반 100샘플) | 서버 | 36.36% | — | — | 100 |
+
+> **bundle_app** = `android_stt_bundle_app` (VNN/OpenVX API), **awaiasr_2** = awnn API.
+> 동일 mode에서 두 앱의 CER 동일 — NPU 추론 결과 일치 확인.
 
 - 양자화 열화: +0.33%p (ONNX → NB)
 - **mode7**이 최적: Slaney mel, log10, preEmph=0.97, reflect padding, energy window
