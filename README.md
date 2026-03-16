@@ -5,13 +5,15 @@ Allwinner T527 NPU (Vivante VIP9000NANOSI_PLUS) 용 음성인식 모델 모음.
 
 ## 모델 목록
 
-| 모델 | 언어 | 아키텍처 | CER | 추론시간 | NB 크기 | 입력 길이 |
-|------|------|---------|-----|----------|---------|----------|
-| [KoCitrinet](ko_citrinet/) | 한국어 | 1D Conv + SE (CTC) | **44.44%** | 120ms | 62MB | 3초 (300f) |
-| [Wav2Vec2](wav2vec2/) | 영어 | CNN + Transformer (CTC) | **17.52%** | 715ms | 87MB | 5초 |
-| [Zipformer](zipformer/) | 한국어 | Zipformer (RNN-T) | 미측정 | 미측정 | 68MB | 스트리밍 |
-| [CitriNet EN](citrinet_en/) | 영어 | 1D Conv + SE (CTC) | 미측정 | 미측정 | 7MB | 3초 |
-| [DeepSpeech2](deepspeech2/) | 영어 | RNN (CTC) | 미측정 | 미측정 | 56MB | 가변 |
+| 모델 | 언어 | 아키텍처 | 양자화 | CER | 입력 길이 | 추론시간 | RTF | NB 크기 |
+|------|------|---------|--------|-----|----------|----------|-----|---------|
+| [KoCitrinet](ko_citrinet/) | 한국어 | 1D Conv + SE (CTC) | int8 | **44.44%** | 3초 | 120ms | 0.04 | 62MB |
+| [Wav2Vec2](wav2vec2/) | 영어 | CNN + Transformer (CTC) | uint8 | **17.52%** | 5초 | 715ms | 0.14 | 87MB |
+| [Zipformer](zipformer/) | 한국어 | Zipformer (RNN-T) | uint8 | 미측정 | 스트리밍 (~0.4초/청크) | 미측정 | 미측정 | 68MB |
+| [CitriNet EN](citrinet_en/) | 영어 | 1D Conv + SE (CTC) | uint8 | 미측정 | 3초 | 미측정 | 미측정 | 7MB |
+| [DeepSpeech2](deepspeech2/) | 영어 | RNN (CTC) | uint8 | 미측정 | ~4.7초 (756f) | 미측정 | 미측정 | 56MB |
+
+> **RTF** (Real-Time Factor) = 추론시간 / 입력 음성 길이. RTF < 1이면 실시간보다 빠름.
 
 ## 하드웨어
 
