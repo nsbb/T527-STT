@@ -1,30 +1,30 @@
-# T527 NPU STT Models
+# T527 NPU 음성인식(STT) 모델
 
-Allwinner T527 NPU (Vivante VIP9000NANOSI_PLUS) 용 음성인식(STT) 모델 모음.
+Allwinner T527 NPU (Vivante VIP9000NANOSI_PLUS) 용 음성인식 모델 모음.
 모든 모델은 uint8/int8 양자화되어 `.nb` (Network Binary) 형태로 변환 완료.
 
-## Models
+## 모델 목록
 
-| Model | Language | Architecture | CER | Inference | NB Size | Input |
-|-------|----------|-------------|-----|-----------|---------|-------|
-| [KoCitrinet](ko_citrinet/) | Korean | 1D Conv + SE (CTC) | 44.44% | 120ms | 62MB | 3s (300f) |
-| [Wav2Vec2](wav2vec2/) | English | CNN + Transformer (CTC) | 17.52% | 715ms | 87MB | 5s |
-| [Zipformer](zipformer/) | Korean | Zipformer (RNN-T) | TBD | TBD | 68MB | streaming |
-| [CitriNet EN](citrinet_en/) | English | 1D Conv + SE (CTC) | TBD | TBD | 7MB | 3s |
-| [DeepSpeech2](deepspeech2/) | English | RNN (CTC) | TBD | TBD | 56MB | variable |
+| 모델 | 언어 | 아키텍처 | CER | 추론시간 | NB 크기 | 입력 길이 |
+|------|------|---------|-----|----------|---------|----------|
+| [KoCitrinet](ko_citrinet/) | 한국어 | 1D Conv + SE (CTC) | **44.44%** | 120ms | 62MB | 3초 (300f) |
+| [Wav2Vec2](wav2vec2/) | 영어 | CNN + Transformer (CTC) | **17.52%** | 715ms | 87MB | 5초 |
+| [Zipformer](zipformer/) | 한국어 | Zipformer (RNN-T) | 미측정 | 미측정 | 68MB | 스트리밍 |
+| [CitriNet EN](citrinet_en/) | 영어 | 1D Conv + SE (CTC) | 미측정 | 미측정 | 7MB | 3초 |
+| [DeepSpeech2](deepspeech2/) | 영어 | RNN (CTC) | 미측정 | 미측정 | 56MB | 가변 |
 
-## Hardware
+## 하드웨어
 
-- **SoC**: Allwinner T527 (ARM Cortex-A55)
+- **SoC**: Allwinner T527 (ARM Cortex-A55 옥타코어)
 - **NPU**: Vivante VIP9000NANOSI_PLUS (PID 0x10000016)
-- **Driver**: VIPLite v0x00010d00
-- **NPU Clock**: 696MHz, DRAM 1.2GHz
+- **드라이버**: VIPLite v0x00010d00
+- **NPU 클럭**: 696MHz, DRAM 1.2GHz
 
-## Toolchain
+## 도구 체인
 
 - **Acuity Toolkit**: v6.12.0 (`pegasus` CLI)
-- **VivanteIDE**: v5.7.2 (vsimulator for NBG generation)
-- **Quantization**: uint8 asymmetric_affine, moving_average
+- **VivanteIDE**: v5.7.2 (vsimulator, NBG 생성)
+- **양자화**: uint8 asymmetric_affine, moving_average
 - **Export**: `pegasus export ovxlib --pack-nbg-unify`
 
 ## NPU API
@@ -44,7 +44,7 @@ awnn_destroy(ctx);
 awnn_uninit();
 ```
 
-## Device Testing (vpm_run)
+## 디바이스 테스트 (vpm_run)
 
 ```bash
 adb push network_binary.nb /data/local/tmp/test/
@@ -54,30 +54,20 @@ adb shell "cd /data/local/tmp/test && LD_LIBRARY_PATH=/vendor/lib64 ./vpm_run_aa
 adb pull /data/local/tmp/test/output_0.dat .
 ```
 
-## Model Details
+## 핵심 발견 사항
 
-### KoCitrinet (Korean)
-- **Source**: NVIDIA NeMo NGC → ONNX → uint8 NB
-- **Input**: `[1, 80, 1, 300]` int8 mel-spectrogram (scale=0.02096, zp=-37)
-- **Output**: `[1, 2049, 1, 38]` int8 → CTC greedy + SentencePiece decode
-- **Performance**: CER 44.44% (330 Korean samples), 120ms/frame
+### T527 NPU 양자화 제약
 
-### Wav2Vec2 (English)
-- **Source**: facebook/wav2vec2-base-960h → ONNX → uint8 NB
-- **Input**: `[1, 80000]` uint8 raw waveform (scale=0.002860, zp=137)
-- **Output**: `[1, 249, 32]` uint8 → CTC greedy decode (32-class English alphabet)
-- **Performance**: CER 17.52%, WER 27.38% (50 LibriSpeech test-clean), 715ms/5s
-- **Quantization degradation**: +7.78%p CER vs ONNX FP32
+- **uint8만 안정 동작** — int16/DFP는 NPU HANG 발생 (물리적 리셋 필요)
+- **bf16 NB 생성 실패** — Acuity gen_nbg segfault
+- **Transformer 모델 한국어 불가** — Wav2Vec2 한국어 50종+ 시도, 전부 실패 (uint8 양자화 열화 누적)
+- **CNN 모델만 한국어 가능** — CitriNet (1D Conv) 계열만 의미 있는 출력
 
-### Zipformer (Korean)
-- **Source**: sherpa-onnx-streaming-zipformer-korean-2024-06-16 → uint8 NB
-- **Components**: Encoder (63MB) + Decoder (2.8MB) + Joiner (1.9MB)
-- **Status**: NB conversion complete, device testing pending
+### 모델별 상세 결과
 
-### CitriNet EN (English)
-- **Source**: NVIDIA NeMo CitriNet → ONNX → uint8 NB
-- **Input**: mel-spectrogram, 3 seconds
-
-### DeepSpeech2 (English)
-- **Source**: TensorFlow → uint8 NB
-- **Input**: spectrogram features
+각 모델 폴더의 README.md 참조:
+- [KoCitrinet](ko_citrinet/): CER 44.44%, 120ms — **한국어 유일한 선택**
+- [Wav2Vec2](wav2vec2/): 영어 CER 17.52%, 한국어 불가능 — [상세 분석](wav2vec2/)
+- [Zipformer](zipformer/): NB 변환 완료, 디바이스 테스트 대기
+- [CitriNet EN](citrinet_en/): NB 변환 완료, 디바이스 테스트 대기
+- [DeepSpeech2](deepspeech2/): NB 변환 완료, 디바이스 테스트 대기
