@@ -24,10 +24,58 @@ Allwinner T527 NPU (Vivante VIP9000NANOSI_PLUS) 용 음성인식 모델 모음.
 
 ## 도구 체인
 
-- **Acuity Toolkit**: v6.12.0 (`pegasus` CLI)
-- **VivanteIDE**: v5.7.2 (vsimulator, NBG 생성)
+- **Acuity Toolkit**: v6.12.0 (주력) / v6.21.16 (대안)
+- **VivanteIDE**: v5.7.2 (6.12용) / v5.8.2 (6.21용)
 - **양자화**: uint8 asymmetric_affine, moving_average
 - **Export**: `pegasus export ovxlib --pack-nbg-unify`
+
+---
+
+## Acuity Toolkit 버전 비교 (6.12 vs 6.21)
+
+### 설치 및 실행
+
+| 항목 | Acuity 6.12.0 | Acuity 6.21.16 |
+|------|---------------|----------------|
+| 설치 형태 | 바이너리 (standalone) | pip wheel (Python) |
+| 실행 | `./pegasus` | `python3 .../pegasus.py` |
+| Docker | `t527-npu:v1.2` | `ubuntu-npu:v1.8.11` |
+| VivanteIDE | 5.7.2 (OVXLIB 1.1.20) | 5.8.2 (OVXLIB 1.2.18) |
+
+### 양자화 지원 비교
+
+| 양자화기 | 6.12 | 6.21 | T527 NPU 실행 |
+|---------|------|------|---------------|
+| asymmetric_affine (uint8) | O | O | **동작** |
+| perchannel_symmetric (PCQ int8) | O | O | **동작** |
+| dynamic_fixed_point (int16) | O | O | HANG |
+| bfloat16 / qbfloat16 | O | O | segfault / HANG |
+| float16 (`--dtype float16`) | X | **O** | 동작 (셰이더 에뮬레이션, 25배 느림) |
+| e4m3 / e5m2 (FP8) | X | **O** | 미테스트 |
+
+> **결론**: T527 NPU에서 실용적인 양자화는 **uint8/int8만**. fp16은 NB 생성·실행 가능하나 하드웨어 가속 아님 (17.7초 vs uint8 0.7초).
+
+### 주요 차이점
+
+| 항목 | 6.12 | 6.21 |
+|------|------|------|
+| export 시 `--with-input-meta` | 불필요 | **필수** |
+| inputmeta lid 검증 | 관대 | **엄격** (정확히 일치 필요) |
+| Graph optimization | 보수적 | 공격적 (NB 작아지나 정확도 하락 가능) |
+
+### 실측 결과 (Wav2Vec2 영어, 50샘플)
+
+| 양자화 | Acuity | CER | WER | NB크기 | 추론시간 |
+|--------|--------|-----|-----|--------|---------|
+| **uint8** | **6.12** | **17.52%** | **27.38%** | **87MB** | **~720ms** |
+| PCQ int8 | 6.21 | 19.24% | 34.39% | 99MB | ~826ms |
+| uint8 | 6.21 | 23.41% | 40.57% | 76MB | ~720ms |
+
+### 권장 사항
+
+- **신규 모델**: 6.12 uint8로 먼저 시도, 정확도 부족시 6.21 PCQ 비교
+- **Docker export**: 6.12는 `EXTRALFLAGS` rpath 설정 필수, 6.21은 lib 심링크 필수
+- **fp16**: 정확도 검증용으로만 사용 (17.7초/추론 → 실서비스 불가)
 
 ## NPU API
 

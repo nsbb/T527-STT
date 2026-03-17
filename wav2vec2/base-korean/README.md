@@ -150,12 +150,87 @@ base-korean/
 └── config.json                   # HuggingFace 모델 config
 ```
 
+## 도메인 미스매치 검증 (2026-03-17)
+
+NPU 양자화 실패와 별개로, ONNX FP32 모델 자체의 성능을 실제 월패드 음성으로 검증.
+
+### 월패드 테스트셋 결과 (ONNX FP32, 양자화 없음)
+
+| 테스트셋 | 샘플 수 | CER |
+|---------|--------|-----|
+| 7F_KSK | 108 | **140.1%** |
+| modelhouse_2m_noheater | 51 | **132.1%** |
+| modelhouse_2m | 51 | **184.0%** |
+| 7F_HJY | 107 | **153.8%** |
+| modelhouse_3m | 51 | **209.7%** |
+| worst30 (전체) | 330 | **168.5%** |
+
+> CER > 100%는 모델이 정답보다 더 많은 글자를 생성함을 의미 (과다 삽입).
+
+### Zeroth-Korean 테스트셋 결과 (학습 도메인)
+
+동일 모델을 학습 데이터와 같은 도메인(Zeroth-Korean test, 457개 낭독체)으로 테스트.
+PyTorch FP32, 가변 길이 입력.
+
+| 항목 | 결과 |
+|------|------|
+| 평균 CER | **9.5%** (100개 샘플) |
+| CER < 10% | 66/100 |
+| CER = 0% (완벽) | 10/100 |
+
+→ 학습 도메인에서는 정상 동작. **NPU 양자화 실패와 도메인 미스매치는 독립적인 두 문제.**
+
+### 실패 원인: 도메인 미스매치
+
+| 항목 | 학습 데이터 (Zeroth-Korean) | 월패드 테스트 데이터 |
+|------|---------------------------|-------------------|
+| **데이터셋** | Zeroth-Korean (51시간) | 실제 월패드 녹음 |
+| **음성 유형** | 뉴스/책 낭독 (6~20초) | 짧은 명령 (1~3초) |
+| **녹음 환경** | 조용한 스튜디오 | 실내 반향 + 생활소음 |
+| **어휘** | 일반 한국어 (뉴스, 소설) | 도메인 특화 (세대소독, 알림음, 가스사용량) |
+| **화자** | 105명 낭독자 | 다양한 일반인 |
+| **Base 모델** | facebook/wav2vec2-base (영어 960시간 pretrain) | — |
+
+### Fine-tuning 방안
+
+모델 아키텍처는 유효함 (Zeroth-Korean CER 9.5%). 월패드 데이터로 fine-tuning하면 개선 가능.
+
+```
+[Option A] 월패드 데이터만으로 추가 fine-tuning
+  - Kkonjeong/wav2vec2-base-korean 체크포인트에서 시작
+  - 월패드 녹음 데이터로 추가 학습 (5~20 epoch)
+  - 장점: 빠름, 94.4M params로 T527 NPU uint8 배포 가능성 있음
+  - 단점: 일반 한국어 성능 저하 가능 (catastrophic forgetting)
+
+[Option B] Zeroth-Korean + 월패드 혼합 학습
+  - facebook/wav2vec2-base 또는 Kkonjeong 체크포인트에서 시작
+  - Zeroth-Korean 51시간 + 월패드 데이터 혼합
+  - 장점: 일반 + 도메인 성능 균형
+  - 단점: 학습 시간 증가
+```
+
+> **주의**: fine-tuning으로 ONNX FP32 성능이 개선되더라도, T527 NPU uint8 양자화에서 동작할 보장은 없음. 영어 모델이 uint8에서 성공한 이유는 activation range가 좁았기 때문이며, 한국어 모델의 wide activation range(본 문서 "실패 원인 분석" 참조)가 fine-tuning으로 개선되는지 확인 필요.
+
+---
+
 ## 결론
 
-T527 NPU에서 한국어 Wav2Vec2 (Transformer 기반)는 **동작 불가능**.
+### 1. NPU 양자화: T527 uint8로는 동작 불가능
+
 - uint8만 NPU에서 실행 가능하나 한국어 모델은 양자화 열화로 출력이 파괴됨
 - int16/bf16은 NPU 하드웨어 미지원
-- CNN 기반 모델(KoCitrinet)만이 유일한 대안
+- 60종+ 양자화 시도, 21종 NPU 실측, 전부 실패
+
+### 2. 도메인 미스매치: FP32에서도 월패드 음성 인식 불가
+
+- Zeroth-Korean(낭독체) CER 9.5% vs 월패드 CER 132~210%
+- 학습 데이터(51시간 낭독체)와 타겟 도메인(월패드 명령어)의 완전한 불일치
+
+### 3. 해결 경로
+
+1. **월패드 데이터로 fine-tuning** → ONNX FP32에서 월패드 CER 개선
+2. **uint8 양자화 재검증** → fine-tuned 모델의 activation range가 좁아졌는지 확인
+3. 실패 시 → CNN 기반 모델(KoCitrinet)이 유일한 대안
 
 ### 시도한 모든 post-training 기법이 실패한 이유
 

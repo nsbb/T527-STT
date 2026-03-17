@@ -10,9 +10,10 @@
 6. [영어 모델 CER 평가 결과](#6-영어-모델-cer-평가-결과)
 7. [한국어 모델(XLS-R-300M) 변환 시도](#7-한국어-모델xls-r-300m-변환-시도)
 8. [한국어 대안 모델(wav2vec2-base-korean) — 50종+ 시도](#8-한국어-대안-모델wav2vec2-base-korean)
-9. [T527 NPU STT 모델 종합 비교 — 최종 결론](#9-t527-npu-stt-모델-종합-비교)
-10. [재현 방법](#10-재현-방법)
-11. [부록](#부록-a-파일-구조)
+9. [한국어 모델 실패 원인 분석 및 Fine-tuning 방안](#9-한국어-모델-실패-원인-분석-및-fine-tuning-방안)
+10. [T527 NPU STT 모델 종합 비교 — 최종 결론](#10-t527-npu-stt-모델-종합-비교)
+11. [재현 방법](#11-재현-방법)
+12. [부록](#부록-a-파일-구조)
 
 ---
 
@@ -37,7 +38,10 @@
 > **RTF (Real-Time Factor)** = 처리시간 ÷ 오디오길이. 1 미만이면 실시간보다 빠른 것.
 > T527 RTF 0.143은 RK3588 fp16 (0.15)과 유사하며, RTX A6000 fp16 (0.007)의 약 20배 느림.
 
-**최종 결론 (2026-03-16 확정):** 한국어 Wav2Vec2(Transformer)는 T527 NPU에서 동작 불가능. CNN 기반 KoCitrinet(CER 44.44%, 120ms, 5MB)이 유일한 실용적 선택.
+**최종 결론 (2026-03-17 업데이트):**
+- 한국어 Wav2Vec2는 ① NPU uint8 양자화 실패 + ② 학습 데이터 도메인 미스매치(Zeroth-Korean 낭독체 51시간 → 월패드 CER 130~210%) 이중 문제.
+- 모델 자체는 학습 도메인(Zeroth-Korean)에서 CER 9.5%로 정상 동작 → **월패드 데이터로 fine-tuning 시 개선 가능성 있음** (9절 참조).
+- 현재 실용적 선택: CNN 기반 KoCitrinet(CER 44.44%, 120ms, 5MB).
 
 ---
 
@@ -1033,9 +1037,153 @@ clean int16 NB: `wksp/clean_int16_nbg_unify_nbg_unify/network_binary.nb` (153MB)
 
 ---
 
-## 9. T527 NPU STT 모델 종합 비교
+## 9. 한국어 모델 실패 원인 분석 및 Fine-tuning 방안
 
-### 9.1 성능 비교
+> 상세 분석은 각 모델 폴더에도 기록:
+> - [base-korean/README.md](base-korean/README.md)
+> - [xls-r-300m-korean/README.md](xls-r-300m-korean/README.md)
+
+### 9.1 NPU 양자화 실패 vs 모델 자체 문제 — 분리 검증
+
+이전 섹션(8절)까지의 결론은 "T527 NPU uint8 양자화가 Transformer에 부적합"이었으나,
+ONNX FP32 모델을 실제 월패드 음성 데이터로 테스트한 결과 **NPU 양자화 이전에 모델 자체가 월패드 도메인에서 동작하지 않음**이 확인되었다.
+
+### 9.2 실측 결과: ONNX FP32 vs 월패드 테스트셋
+
+`Kkonjeong/wav2vec2-base-korean` 모델을 양자화 없이 **ONNX FP32 (CPU)**로 실행.
+테스트셋: `C:\Users\nsbb\travail\STT\testset\` (월패드 실녹음 음성, 16kHz)
+
+#### 월패드 테스트셋 결과 (ONNX FP32)
+
+| 테스트셋 | 샘플 수 | Wav2Vec2 CER | KoCitrinet CER | 배율 |
+|---------|--------|-------------|----------------|------|
+| 7F_KSK | 108 | **140.1%** | 2.66% | 53배 |
+| modelhouse_2m_noheater | 51 | **132.1%** | 3.59% | 37배 |
+| modelhouse_2m | 51 | **184.0%** | 8.51% | 22배 |
+| 7F_HJY | 107 | **153.8%** | 9.27% | 17배 |
+| modelhouse_3m | 51 | **209.7%** | 15.72% | 13배 |
+| worst30 (전체) | 330 | **168.5%** | — | — |
+
+> CER > 100%는 모델이 정답보다 더 많은 글자를 생성함을 의미 (과다 삽입).
+
+#### 월패드 출력 예시
+
+```
+GT: 세대소독알려줘        -> ㅡ셍 대 수느독 알려죵           CER=71%   (best case)
+GT: 칠월오일공지알려줘      -> 칠 원 오 일 공제 알려죠         CER=33%   (best case)
+GT: 알림음켜줘            -> ㅇ 아릴일 건 싸 ㅇ 동 ㅇ ㅇ ㅇ   CER=540%  (worst case)
+GT: 뭔데?해줘.           -> ㅇ뭔 장 안 인 달 졸근 ㄴ 그 은    CER=350%  (worst case)
+```
+
+#### Zeroth-Korean 테스트셋 결과 (학습 데이터 도메인)
+
+동일 모델을 학습 데이터와 같은 도메인인 Zeroth-Korean 테스트셋(457개, 낭독체)으로 테스트.
+**PyTorch FP32, 가변 길이 입력** (3초 고정이 아닌 원래 길이 그대로 입력).
+
+| 항목 | 결과 |
+|------|------|
+| 테스트셋 | Zeroth-Korean test (457개) |
+| 평균 CER | **9.5%** (100개 샘플 측정) |
+| CER < 10% | 66/100 |
+| CER = 0% (완벽) | 10/100 |
+| CER > 50% | 2/100 |
+
+```
+GT: 평소 오전 아홉 시 에서 오후 일곱 시까지 일하면 하루 이만원    -> (동일)  CER=0%
+GT: 강아지가 용변을 보도록 유도하는 말을 가르칠 수도 있다          -> (동일)  CER=0%
+GT: 지난해 이들 크루즈관광객의 평균 체류기간은 오 쩜 구사 시간      -> CER=4%
+GT: 젠슨 황은 엔비디아에서 매출의 삼십 퍼센트 이상을 연구개발에     -> CER=3.3%
+```
+
+### 9.3 실패 원인: 도메인 미스매치
+
+| 항목 | Wav2Vec2 Korean 학습 데이터 | 월패드 테스트 데이터 |
+|------|---------------------------|-------------------|
+| **데이터셋** | Zeroth-Korean (51시간) | 실제 월패드 녹음 |
+| **음성 유형** | 뉴스/책 낭독 (긴 문장, 6~20초) | 짧은 명령 (1~3초) |
+| **녹음 환경** | 조용한 스튜디오 | 실내 반향 + 생활소음 |
+| **어휘** | 일반 한국어 (뉴스, 소설) | 도메인 특화 (세대소독, 알림음, 가스사용량) |
+| **화자** | 105명 낭독자 | 다양한 일반인 |
+| **Base 모델** | facebook/wav2vec2-base (**영어** 960시간 pretrain) | — |
+| **Fine-tune 시간** | 51시간 (10 epoch, A100 8시간) | — |
+
+**핵심 원인:**
+
+1. **학습 데이터 도메인 불일치** — 낭독체 51시간으로는 월패드 명령어(짧고, 반향 있고, 도메인 어휘)를 인식 불가
+2. **학습량 절대 부족** — 51시간은 STT 모델 기준 매우 적음. KoCitrinet은 4,356시간으로 학습
+3. **영어 pretrain 위 한국어 fine-tune** — wav2vec2-base는 영어 LibriSpeech 960시간으로 pretrain된 모델. 한국어 음소 특성(자모 조합, 받침 등) 학습이 부족
+4. **자모 CTC 한계** — 56토큰 자모 분해는 "안녕"을 `ㅇㅏㄴㄴㅕㅇ` 6토큰으로 출력해야 하므로 하나만 틀려도 음절 깨짐. 언어 모델 없는 greedy CTC에서 특히 취약
+
+### 9.4 Fine-tuning 방안
+
+모델 아키텍처 자체는 유효함 (Zeroth-Korean CER 9.5%). 월패드 도메인 데이터로 fine-tuning하면 성능 개선 가능.
+
+#### 학습 데이터
+
+| 데이터 | 시간 | 용도 |
+|--------|------|------|
+| Zeroth-Korean train | 51시간 | 기본 한국어 음성 (기존 학습 데이터) |
+| **월패드 녹음 데이터** | ? 시간 | **도메인 적응 핵심** |
+| KsponSpeech (공개) | 969시간 | 한국어 자유대화 (추가 가능) |
+
+#### Fine-tuning 전략
+
+```
+[Option A] 월패드 데이터만으로 추가 fine-tuning
+  - Kkonjeong/wav2vec2-base-korean 체크포인트에서 시작
+  - 월패드 녹음 데이터로 추가 학습 (5~20 epoch)
+  - 장점: 빠름 (데이터 적어도 가능)
+  - 단점: 일반 한국어 성능 저하 가능 (catastrophic forgetting)
+
+[Option B] Zeroth-Korean + 월패드 혼합 학습
+  - facebook/wav2vec2-base 또는 Kkonjeong 체크포인트에서 시작
+  - Zeroth-Korean 51시간 + 월패드 데이터 혼합
+  - 장점: 일반 + 도메인 성능 균형
+  - 단점: 학습 시간 증가
+
+[Option C] 한국어 pretrain 모델 사용 (권장)
+  - facebook/wav2vec2-xls-r-300m (128개 언어 pretrain, 한국어 포함)
+  - 또는 kresnik/wav2vec2-large-xlsr-korean (XLS-R + 한국어 fine-tune)
+  - 월패드 데이터로 추가 fine-tuning
+  - 장점: 한국어 음소 기반 지식 충분, 대형 모델 성능
+  - 단점: 300M params → T527 NPU uint8 양자화 불가 (이전 결과 참조)
+```
+
+#### 학습 환경 (참고)
+
+```python
+# HuggingFace Trainer 기반 fine-tuning 예시
+from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor, TrainingArguments, Trainer
+
+model = Wav2Vec2ForCTC.from_pretrained("Kkonjeong/wav2vec2-base-korean")
+processor = Wav2Vec2Processor.from_pretrained("Kkonjeong/wav2vec2-base-korean")
+
+training_args = TrainingArguments(
+    output_dir="./wav2vec2-korean-wallpad",
+    per_device_train_batch_size=16,
+    learning_rate=1e-4,
+    num_train_epochs=10,
+    fp16=True,
+    evaluation_strategy="steps",
+    save_steps=500,
+)
+# + CTC loss, data collator, 전처리 등 필요
+```
+
+> **주의**: fine-tuning으로 ONNX FP32 성능이 개선되더라도, T527 NPU uint8 양자화에서 동작할 보장은 없음 (8절 참조). 영어 모델이 uint8에서 동작한 이유는 입력 범위가 좁아 양자화 step size가 작았기 때문이며, 한국어 데이터의 입력 범위가 영어와 비슷해지는지 확인 필요.
+
+#### NPU 배포 시 고려사항
+
+1. **uint8 양자화 호환성 검증 필수** — fine-tuning 후 반드시 Acuity uint8 양자화 → NPU 실측 확인
+2. **입력 길이**: 월패드 명령은 1~3초. 3초 고정(48,000 samples) 모델이 적합
+3. **Calibration 데이터**: fine-tuning에 사용한 월패드 데이터를 calibration에도 사용하면 양자화 품질 개선 기대
+4. **fp16 NB 대안**: Acuity 6.21의 `--dtype float16` export로 fp16 NB 생성 가능하나, T527에서 17.7초/추론 (VX 셰이더 에뮬레이션)으로 실용성 없음
+
+---
+
+## 10. T527 NPU STT 모델 종합 비교
+
+### 10.1 성능 비교
 
 #### 성공 모델
 
@@ -1065,7 +1213,7 @@ clean int16 NB: `wksp/clean_int16_nbg_unify_nbg_unify/network_binary.nb` (153MB)
 | base-korean opset12+sim int16 | int16 DFP | 153MB | — | **NPU HANG** | 디바이스 크래시 |
 | base-korean DFP int8 | DFP int8 | 55MB | — | **NPU HANG** | DFP 형식 자체 미지원 |
 
-### 9.2 최종 분석
+### 10.2 최종 분석
 
 1. **T527 NPU에서 한국어 Wav2Vec2 STT는 불가능** — 50종+ 변형, 21종 NPU 실측. uint8은 garbled, int16은 NPU HANG, 소형 모델은 실행 거부. 어떤 조합으로도 의미 있는 한국어 텍스트를 얻을 수 없다.
 
@@ -1090,7 +1238,7 @@ clean int16 NB: `wksp/clean_int16_nbg_unify_nbg_unify/network_binary.nb` (153MB)
    - KoCitrinet: 3초 오디오를 0.12초에 처리 → **25배 실시간**
    - Wav2Vec2 (영어): 5초 오디오를 0.72초에 처리 → **7배 실시간**
 
-### 9.3 NPU 성능 비교 (타 플랫폼)
+### 10.3 NPU 성능 비교 (타 플랫폼)
 
 | 플랫폼 | 양자화 | RTF | 비교 |
 |--------|--------|-----|------|
@@ -1100,7 +1248,7 @@ clean int16 NB: `wksp/clean_int16_nbg_unify_nbg_unify/network_binary.nb` (153MB)
 
 ---
 
-## 10. 재현 방법
+## 11. 재현 방법
 
 ### 10.1 vpm_run으로 NPU 직접 테스트
 
@@ -1247,3 +1395,7 @@ ai-sdk/models/w2v_v.1.0.0_onnx/
 | 2026-03-15 | Split model, clean 모델, XLS-R opset12 | CNN 3.7MB + Transformer 139MB |
 | 2026-03-16 | int16 시뮬레이션 검증 (FP32=int16=PyTorch 100% 동일) | 완벽 품질 보존 확인 |
 | **2026-03-16** | **Phase 3-4 NPU 실측 (11종 추가 테스트)** | **전부 실패 — 최종 결론 확정** |
+| 2026-03-17 | Acuity 6.12 vs 6.21 비교 (영어 50샘플) | 6.12 uint8 최적 (CER 17.52%) |
+| 2026-03-17 | fp16 NB 생성 (Acuity 6.21 `--dtype float16`) | 182MB, 17.7초 (셰이더 에뮬레이션) |
+| **2026-03-17** | **월패드 테스트셋 ONNX FP32 평가** | **CER 132~210% — 도메인 미스매치 확인** |
+| **2026-03-17** | **Zeroth-Korean 테스트셋 PyTorch FP32 평가** | **CER 9.5% — 학습 도메인에서는 정상** |
