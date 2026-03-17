@@ -220,6 +220,39 @@ base-korean/
 └── config.json                   # HuggingFace 모델 config
 ```
 
+## 문서 및 데이터
+
+### 분석 보고서
+
+| 파일 | 설명 |
+|------|------|
+| [wav2vec2_korean_npu_analysis.md](wav2vec2_korean_npu_analysis.md) | 양자화 실패 분석 보고서 (현상분석, 원인분석, 결론, HuggingFace 전수 조사) |
+
+### 테스트 결과 CSV
+
+| 파일 | 설명 |
+|------|------|
+| [test_results_zeroth_korean_pytorch_fp32.csv](test_results_zeroth_korean_pytorch_fp32.csv) | Zeroth-Korean 100샘플 PyTorch FP32 결과 (CER 9.5%) |
+| [test_results_fp16_npu.csv](test_results_fp16_npu.csv) | fp16 NB T527 NPU 테스트 결과 (17.7초 CPU fallback) |
+| [test_results_7F_HJY_onnx_fp32.csv](test_results_7F_HJY_onnx_fp32.csv) | 7F_HJY 월패드 ONNX FP32 결과 |
+| [test_results_7F_KSK_onnx_fp32.csv](test_results_7F_KSK_onnx_fp32.csv) | 7F_KSK 월패드 ONNX FP32 결과 |
+| [test_results_modelhouse_2m_onnx_fp32.csv](test_results_modelhouse_2m_onnx_fp32.csv) | modelhouse_2m 월패드 ONNX FP32 결과 |
+| [test_results_modelhouse_2m_noheater_onnx_fp32.csv](test_results_modelhouse_2m_noheater_onnx_fp32.csv) | modelhouse_2m_noheater 월패드 ONNX FP32 결과 |
+| [test_results_modelhouse_3m_onnx_fp32.csv](test_results_modelhouse_3m_onnx_fp32.csv) | modelhouse_3m 월패드 ONNX FP32 결과 |
+
+### 스크립트
+
+| 파일 | 설명 |
+|------|------|
+| [download_and_convert.py](download_and_convert.py) | HuggingFace → ONNX 변환 |
+| [decode_ko_output.py](decode_ko_output.py) | NPU 출력 → 한국어 텍스트 |
+| [prepare_ko_test_input.py](prepare_ko_test_input.py) | 테스트 입력 준비 |
+| [create_cnn_only_model.py](create_cnn_only_model.py) | CNN-only ONNX 추출 |
+| [test_all_nbs.sh](test_all_nbs.sh) | 전체 NB 일괄 테스트 |
+| [test_priority_nbs.sh](test_priority_nbs.sh) | 우선순위 NB 테스트 |
+| [test_split_model.sh](test_split_model.sh) | CNN/Transformer 분리 테스트 |
+| [auto_test_on_connect.sh](auto_test_on_connect.sh) | 디바이스 연결 시 자동 테스트 |
+
 ## 도메인 미스매치 검증 (2026-03-17)
 
 NPU 양자화 실패와 별개로, ONNX FP32 모델 자체의 성능을 실제 월패드 음성으로 검증.

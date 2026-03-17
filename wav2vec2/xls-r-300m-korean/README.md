@@ -55,6 +55,22 @@ xls-r-300m-korean/
 └── vocab_xlsr.json               # 2,617 음절 vocab
 ```
 
+## 문서 및 데이터
+
+### 스크립트
+
+| 파일 | 설명 |
+|------|------|
+| [run_pipeline.sh](run_pipeline.sh) | 전체 변환 파이프라인 (ONNX → NB) |
+| [make_fixed_onnx.py](make_fixed_onnx.py) | 동적 → 고정 shape ONNX 변환 |
+| [prune_layers.py](prune_layers.py) | Transformer 레이어 pruning (24L→12L) |
+| [prepare_calib_data.py](prepare_calib_data.py) | calibration 데이터 준비 |
+| [prepare_test_input.py](prepare_test_input.py) | 테스트 입력 준비 |
+| [decode_npu_output.py](decode_npu_output.py) | NPU 출력 → 한국어 텍스트 |
+| [compare_onnx_npu.py](compare_onnx_npu.py) | ONNX vs NPU 출력 비교 |
+| [analyze_output.py](analyze_output.py) | 출력 분석 |
+| [test_xlsr_opset12_nb.sh](test_xlsr_opset12_nb.sh) | opset12 NB 디바이스 테스트 |
+
 ## 도메인 미스매치 검증 (2026-03-17)
 
 NPU 양자화 실패와 별개로, 모델 자체의 성능을 검증.

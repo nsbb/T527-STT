@@ -35,6 +35,12 @@ citrinet_en/
 └── convert_export.sh     # Pegasus 변환 스크립트
 ```
 
+## 문서 및 데이터
+
+| 파일 | 설명 |
+|------|------|
+| [convert_export.sh](convert_export.sh) | Pegasus 변환 스크립트 (ONNX → NB) |
+
 ## 전처리
 
 KoCitrinet과 동일:
