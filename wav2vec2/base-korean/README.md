@@ -2,6 +2,8 @@
 
 Kkonjeong/wav2vec2-base-korean. 한국어 STT, T527 NPU 양자화. **전부 실패.**
 
+> **[양자화 실패 분석 보고서 (wav2vec2_korean_npu_analysis.md)](wav2vec2_korean_npu_analysis.md)** — 현상분석, 원인분석(가중치 비교, activation range), HuggingFace 모델 전수 조사, 해결 방안(QAT)
+
 ## 결과: 60종+ 시도, 21종 NPU 실측, 전부 실패
 
 | 카테고리 | 시도 수 | 결과 |
