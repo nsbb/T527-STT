@@ -121,4 +121,4 @@ adb pull /data/local/tmp/test/output_0.dat .
 - [Zipformer](zipformer/): NB 변환 완료, 디바이스 테스트 대기
 - [CitriNet EN](citrinet_en/): NB 변환 완료, 디바이스 테스트 대기
 - [DeepSpeech2](deepspeech2/): NB 변환 완료, 디바이스 테스트 대기
-- [테스트셋](testset/): 월패드 실환경 녹음 + 공개 데이터셋 (worst30 분석 포함)
+- [테스트셋](testset/): 평가용 음성 데이터 — [자사 수집(ailab)](testset/ailab/), [영어(LibriSpeech)](testset/base_english/), [한국어(Zeroth-Korean)](testset/base_korean/)
