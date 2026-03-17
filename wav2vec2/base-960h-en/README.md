@@ -47,6 +47,20 @@ base-960h-en/
     └── eval_wav2vec_cer.py                # CER/WER 평가
 ```
 
+## 문서 및 데이터
+
+| 파일 | 설명 |
+|------|------|
+| [test_results_librispeech.csv](test_results_librispeech.csv) | LibriSpeech test-clean 50샘플 결과 (GT, pred, CER, WER) |
+
+### 스크립트 (`scripts/`)
+
+| 파일 | 설명 |
+|------|------|
+| [compare_onnx_npu.py](scripts/compare_onnx_npu.py) | ONNX vs NPU 출력 비교 |
+| [compare_onnx_npu_50.py](scripts/compare_onnx_npu_50.py) | 50개 샘플 배치 비교 |
+| [eval_wav2vec_cer.py](scripts/eval_wav2vec_cer.py) | CER/WER 평가 |
+
 ## 변환 과정
 
 1. HuggingFace → ONNX export (opset 14)

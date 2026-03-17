@@ -38,6 +38,15 @@ deepspeech2/
     └── post_process.py         # 후처리 스크립트
 ```
 
+## 문서 및 데이터
+
+### 스크립트 (`scripts/`)
+
+| 파일 | 설명 |
+|------|------|
+| [pre_process.py](scripts/pre_process.py) | 전처리 스크립트 (WAV → spectrogram) |
+| [post_process.py](scripts/post_process.py) | 후처리 스크립트 (NPU 출력 → 텍스트) |
+
 ## 전처리
 
 ```

@@ -43,6 +43,21 @@
 - 모델 자체는 학습 도메인(Zeroth-Korean)에서 CER 9.5%로 정상 동작 → **월패드 데이터로 fine-tuning 시 개선 가능성 있음** (9절 참조).
 - 현재 실용적 선택: CNN 기반 KoCitrinet(CER 44.44%, 120ms, 5MB).
 
+## 하위 폴더
+
+| 폴더 | 설명 |
+|------|------|
+| [base-960h-en/](base-960h-en/) | 영어 모델 (CER 17.52%, **동작 성공**) |
+| [base-korean/](base-korean/) | 한국어 base 모델 (50종+ 시도, **전부 실패**) — [분석 보고서](base-korean/wav2vec2_korean_npu_analysis.md) |
+| [xls-r-300m-korean/](xls-r-300m-korean/) | 한국어 XLS-R-300M (8종+ 시도, **전부 실패**) |
+
+## 평가 스크립트
+
+| 파일 | 설명 |
+|------|------|
+| [eval_wav2vec2_ko_wallpad.py](eval_wav2vec2_ko_wallpad.py) | 한국어 ONNX FP32 월패드 테스트셋 평가 |
+| [eval_wav2vec2_ko_zeroth.py](eval_wav2vec2_ko_zeroth.py) | 한국어 PyTorch FP32 Zeroth-Korean 평가 |
+
 ---
 
 ## 2. Wav2Vec2 모델 구조

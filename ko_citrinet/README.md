@@ -128,6 +128,24 @@ bash scripts/run_pipeline_ko.sh \
 - **awaiasr_2**: `CitrinetTestActivity` — awnn API, processWithJavaMel()
 - **android_stt_bundle_app**: `MainActivity` — VNN/OpenVX API (현재 주력)
 
+## 문서 및 데이터
+
+| 파일 | 설명 |
+|------|------|
+| [test_results_sample30.csv](test_results_sample30.csv) | sample30 테스트셋 330개 결과 (GT, pred, CER, exact_match) |
+
+### 스크립트 (`scripts/`)
+
+| 파일 | 설명 |
+|------|------|
+| [run_pipeline_ko.sh](scripts/run_pipeline_ko.sh) | 전체 파이프라인 (nemo → NB) |
+| [export_onnx_ko.py](scripts/export_onnx_ko.py) | .nemo → ONNX 변환 |
+| [make_npy_dataset.py](scripts/make_npy_dataset.py) | WAV → mel feature npy |
+| [run_one_wav_to_text_int8.sh](scripts/run_one_wav_to_text_int8.sh) | WAV → 텍스트 (디바이스) |
+| [run_one_wav_to_text_server_int8.sh](scripts/run_one_wav_to_text_server_int8.sh) | WAV → 텍스트 (서버) |
+| [decode_nb_output_ko.py](scripts/decode_nb_output_ko.py) | NPU 출력 → 한국어 텍스트 |
+| [eval_test_cer.py](scripts/eval_test_cer.py) | CER 평가 |
+
 ## 변환 이력
 
 1. NeMo `.nemo` → ONNX (`export_onnx_ko.py`)
