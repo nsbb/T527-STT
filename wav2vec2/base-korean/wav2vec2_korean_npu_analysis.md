@@ -215,20 +215,60 @@ facebook/wav2vec2-base (pretrained, 영어 uint8 성공)
 - 학습 데이터: Zeroth-Korean 51시간 + 월패드 데이터
 - HuggingFace Transformers + Optimum
 
-#### [방안 B] 다른 한국어 모델 탐색
+#### [방안 B] 다른 한국어 모델 탐색 — HuggingFace 전수 조사 결과
 
-activation range가 좁은 한국어 STT 모델을 찾아서 uint8 양자화 테스트.
+activation range가 좁은 한국어 STT 모델을 찾아서 uint8 양자화 테스트하려 했으나, **base 크기(~94M, 12L)인 한국어 Wav2Vec2 모델이 Kkonjeong 하나밖에 없음.**
 
-- CNN 기반 모델 (Conformer, Citrinet 등)은 Transformer보다 양자화 친화적
-- KoCitrinet이 T527 uint8에서 성공한 것이 증거
+##### HuggingFace 한국어 Wav2Vec2/STT 모델 전체 목록 (2026-03-17 기준)
 
-#### [방안 C] 현재 KoCitrinet 개선
+| 모델 | 파라미터 | 구조 | 학습 데이터 | T527 uint8 |
+|------|---------|------|-----------|:----------:|
+| **Kkonjeong/wav2vec2-base-korean** | 94.4M, 12L | base | Zeroth-Korean 51h | **X** (실패 확인) |
+| slplab/wav2vec2-xls-r-300m_phone-mfa | 300M, 24L | XLS-R-300M | PB Korean 108h | X (300M 너무 큼) |
+| w11wo/wav2vec2-xls-r-300m-korean | 300M, 24L | XLS-R-300M | Zeroth-Korean | X (동일) |
+| slplab/wav2vec2-xls-r_Korean_ASR_by_foreigners | 300M, 24L | XLS-R-300M | AIHub 48h | X (동일) |
+| kresnik/wav2vec2-large-xlsr-korean | 300M+, 24L | Large XLSR | Zeroth-Korean | X (너무 큼) |
+| weekcircle/mms-1b-korean | 1B+ | MMS | Meta MMS 500Kh | X (논외) |
+| eesungkim/stt_kr_conformer_transducer_large | Large | Conformer | KsponSpeech 969h | 사이즈 미확인 |
+| speechbrain/asr-conformer-ksponspeech | Large | Conformer | KsponSpeech 969h | 사이즈 미확인 |
+| steja/whisper-small-korean | 244M | Whisper | FLEURS Korean | X (244M, 다른 아키텍처) |
+
+> **T527 uint8 양자화 성공 조건**: ~100M params 이하, 12 layers 이하 (영어 base-960h가 유일한 성공 사례).
+> 한국어 모델 중 이 조건을 만족하는 것은 Kkonjeong/base-korean **단 하나**이며, 이것이 실패했으므로 기존 공개 모델로는 불가능.
+
+##### 왜 base 크기 한국어 모델이 하나뿐인가?
+
+- facebook/wav2vec2-base는 영어 960시간으로 pretrain된 base 모델
+- 대부분의 한국어 연구자들은 XLS-R-300M (다국어 pretrain, 300M params)을 base로 사용
+- base 크기(94M)에서 한국어 fine-tuning한 사람이 Kkonjeong뿐
+- 300M 모델은 T527에서 uint8 양자화 자체가 불가능 (오류 누적 심각)
+
+##### 결론
+
+공개된 한국어 모델 중 T527 uint8에 적합한 것은 없음. **직접 QAT fine-tuning(방안 A)이 유일한 경로.**
+
+#### [방안 C] 현재 KoCitrinet 개선 (가장 안전한 대안)
 
 이미 T527에서 동작하는 KoCitrinet (CER 44.44%, 120ms)을 개선:
-- 월패드 데이터로 추가 fine-tuning
-- 더 큰 모델 (500프레임 등) 시도
+- 월패드 데이터로 추가 fine-tuning → 도메인 CER 개선
+- CNN 기반이므로 uint8 양자화에 문제 없음 (이미 검증)
+- 더 큰 모델 (500프레임 = 5초 입력) 시도
 
-### 3.4 증거 자료
+> KoCitrinet이 T527 uint8에서 성공한 것 자체가 **CNN 기반 모델은 양자화 친화적**이라는 증거.
+> Wav2Vec2(Transformer)는 attention score의 wide range 때문에 uint8과 구조적으로 비호환.
+
+### 3.4 T527 NPU STT 모델 전체 비교
+
+| 모델 | 언어 | 아키텍처 | T527 uint8 | CER | 추론시간 | NB 크기 |
+|------|------|---------|:----------:|-----|---------|---------|
+| **KoCitrinet 300f** | 한국어 | CNN (1D Conv+SE) | **O** | 44.44% | 120ms | ~5MB |
+| Wav2Vec2 base-960h | 영어 | Transformer 12L | **O** | 17.52% | 715ms | 87MB |
+| Wav2Vec2 base-korean | 한국어 | Transformer 12L | **X** | (9.53% FP32) | — | — |
+| Wav2Vec2 XLS-R-300M | 한국어 | Transformer 24L | **X** | (1.78% FP32) | — | — |
+
+> 현재 T527 NPU에서 실시간 한국어 STT가 가능한 유일한 모델은 **KoCitrinet**.
+
+### 3.6 증거 자료
 
 | 자료 | 위치 |
 |------|------|
