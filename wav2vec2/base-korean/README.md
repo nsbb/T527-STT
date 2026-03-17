@@ -107,16 +107,18 @@ SmoothQuant v1/v2는 LayerNorm γ/β를 `/s`로 수정 → LN 출력 전체가 `
 - **디바이스 실행: `fail to run network, status=-1`** — NPU가 int16 DFP 모델 실행을 거부
 - 앱에서 PAD만 출력: status=-1 → 출력 버퍼 초기화 안 됨 → 0 = PAD 토큰
 
-## Acuity Toolkit 지원 데이터 타입
+## Acuity Toolkit 지원 데이터 타입 vs T527 NPU 현실
 
-| 데이터 타입 | Pegasus quantizer | NB 크기 | 정밀도 | 비고 |
-|------------|-------------------|---------|--------|------|
-| **uint8** | `asymmetric_affine` | ~72MB | 256단계 | T527 NPU 실행 가능. 단, 이 모델은 양자화 열화로 쓰레기 출력 |
-| **int8 (PCQ)** | `perchannel_symmetric_affine` | ~72MB | 채널별 256단계 | NB 생성 실패 (Reshape tensor error / segfault) |
-| **int16 (DFP)** | `dynamic_fixed_point` | ~153MB | 65536단계 | NB 생성 성공, **T527 NPU가 실행 거부** (status=-1) |
-| **bf16** | `qbfloat16` | ~181MB | bfloat16 | NB 생성 실패 (gen_nbg segfault, 0 bytes) |
-| **fp16** | 없음 (`export --dtype float`) | ~182MB | IEEE float16 | **NB 생성 성공 (182MB). 디바이스 미검증** |
-| **fp32** | 없음 | ~362MB | float32 | SRAM 부족으로 NPU 실행 불가 |
+| 데이터 타입 | Pegasus quantizer | NB 크기 | T527 HW 가속 | 이 모델 결과 |
+|------------|-------------------|---------|:----------:|------------|
+| **uint8** | `asymmetric_affine` | ~72MB | **O** (425ms) | 양자화 열화 → 쓰레기 출력 |
+| **int8 (PCQ)** | `perchannel_symmetric_affine` | ~72MB | O (추정) | NB 생성 실패 (segfault) |
+| **int16 (DFP)** | `dynamic_fixed_point` | ~153MB | **X** (status=-1) | NPU가 실행 거부 |
+| **bf16** | `qbfloat16` | ~181MB | X | NB 생성 실패 (0 bytes) |
+| **fp16** | 없음 (`export --dtype float`) | ~182MB | **X** (CPU fallback) | 실행되나 17.7초 (42배 느림) |
+| **fp32** | 없음 | ~362MB | X | SRAM 부족 |
+
+> **결론: T527 Vivante VIP9000 NPU는 uint8 연산만 HW 가속.** int8 PCQ도 HW 가속 가능할 것으로 추정되나 Acuity gen_nbg가 wav2vec2 구조에서 NB 생성에 실패. 나머지(int16/bf16/fp16/fp32)는 실행 거부 또는 CPU fallback.
 
 ### 각 타입별 calibration/알고리즘 조합 시도
 
@@ -164,14 +166,16 @@ SmoothQuant v1/v2는 LayerNorm γ/β를 `/s`로 수정 → LN 출력 전체가 `
 | 1 | Acuity 6.12 | .quantize 성공 (35KB), gen_nbg segfault → NB 0 bytes |
 | 2 | Acuity 6.21 | .quantize 성공, gen_nbg segfault → NB 0 bytes |
 
-#### fp16 (export --dtype float) — **미검증, NB 존재**
+#### fp16 (export --dtype float) — NPU 실행 성공, CPU fallback
 
-| # | 방법 | NB 크기 | I/O dtype | 디바이스 테스트 |
-|---|------|---------|----------|-------------|
-| 1 | FP32 모델 → `export --dtype float` | **182MB** | float16 in/out | **미수행** |
-| 2 | uint8 quantize → `export --dtype float` | **182MB** | float16 in/out | **미수행** |
+| # | 방법 | NB 크기 | I/O dtype | NPU 실행 | 추론 시간 |
+|---|------|---------|----------|---------|----------|
+| 1 | FP32 모델 → `export --dtype float` | **182MB** | float16 in/out | **성공** | **17.7초** |
+| 2 | uint8 quantize → `export --dtype float` | **182MB** | float16 in/out | 미수행 | — |
 
-> fp16은 양자화가 아니라 FP32→FP16 다운캐스트. 정밀도 손실이 최소. **T527 NPU에서 실행 가능한지 확인 필요.**
+> fp16은 양자화가 아니라 FP32→FP16 다운캐스트. ONNX FP32 대비 argmax agreement **98.0%** — 변환 자체는 거의 무손실.
+> 그러나 추론 17.7초 (uint8 425ms의 42배) → **T527 NPU가 fp16을 HW 가속하지 않고 CPU fallback**하는 것으로 판단.
+> vpm_run 로그: `quant_format=0, none-quant`, memory pool 24MB.
 
 #### 구조 변경 시도
 
@@ -279,15 +283,18 @@ PyTorch FP32, 가변 길이 입력.
 
 ## 결론
 
-### 1. NPU 양자화: T527 uint8로는 동작 불가능
+### 1. NPU 양자화: T527에서 사용 가능한 경로 없음
 
-- uint8만 NPU에서 실행 가능하나 한국어 모델은 양자화 열화로 출력이 파괴됨
-- int8 PCQ: gen_nbg segfault (NB 생성 불가)
-- int16 DFP: NB 생성 성공, NPU status=-1 (실행 거부)
-- bf16: gen_nbg segfault (NB 0 bytes)
-- **fp16: NB 생성 성공 (182MB), 디바이스 미검증** ← 유일한 미확인 경로
-- fp32: SRAM 부족 (362MB)
-- 60종+ 양자화 시도, 21종 NPU 실측, 전부 실패
+T527 NPU는 **uint8만 HW 가속** → 이 모델은 uint8 양자화가 파괴 → **막힘**.
+
+| 타입 | NB 생성 | NPU 실행 | HW 가속 | 출력 품질 |
+|------|---------|---------|---------|----------|
+| uint8 | O (72MB) | O (425ms) | **O** | **X** (garbled) |
+| int8 PCQ | X (segfault) | — | O (추정) | — |
+| int16 | O (153MB) | X (status=-1) | X | 시뮬에서 정상 |
+| bf16 | X (0 bytes) | — | X | — |
+| fp16 | O (182MB) | O (17.7초) | **X** (CPU) | ONNX와 98% 일치 |
+| fp32 | — | X (SRAM) | X | — |
 
 ### 2. 도메인 미스매치: FP32에서도 월패드 음성 인식 불가
 
@@ -296,10 +303,9 @@ PyTorch FP32, 가변 길이 입력.
 
 ### 3. 해결 경로
 
-1. **fp16 NB 디바이스 검증** → 182MB NB가 T527에서 실행되는지 확인 (미검증 상태)
-2. fp16 성공 시 → Zeroth-Korean 데이터로 CER 측정 → 월패드 fine-tuning → 배포
-3. fp16 실패 시 → **월패드 데이터로 fine-tuning** → uint8 양자화 재검증 (activation range 변화 확인)
-4. 모두 실패 시 → CNN 기반 모델(KoCitrinet)이 유일한 대안
+1. **QAT (Quantization-Aware Training)** → 학습 중 uint8 양자화 시뮬레이션, activation range 억제
+2. **월패드 데이터로 fine-tuning** → 도메인 미스매치 해결 + 양자화 호환성 재검증
+3. 모두 실패 시 → CNN 기반 모델(KoCitrinet)이 유일한 대안 (현재 CER 44.44%, 120ms)
 
 ### 시도한 모든 post-training 기법이 실패한 이유
 
@@ -313,4 +319,4 @@ uint8 per-tensor 양자화의 한계는 **모델 전체에 분산된 wide activa
 | CNN feature extractor | 454-960 | ✗ Conv | — | 개선 불가 |
 
 → SmoothQuant는 병목 중 하나만 해결. 나머지가 여전히 uint8을 파괴.
-→ 해결 가능 경로: (1) fp16 NB 실행 확인, (2) QAT(학습 기반), (3) int16/bf16 NPU 하드웨어.
+→ 해결 가능 경로: (1) QAT로 uint8 호환 모델 학습, (2) 다른 NPU 칩(int16/bf16 HW 지원).
