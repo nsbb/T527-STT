@@ -1,6 +1,6 @@
 # 한국어 Wav2Vec2 T527 NPU 배포 전략서
 
-> 작성일: 2026-03-17 | 갱신: 2026-03-18 | 상태: 분석 완료, 실행 대기
+> 작성일: 2026-03-17 | 갱신: 2026-03-18 | 상태: ONNX 재변환 검증 완료, QAT/KD 실행 대기
 
 ## 1. 문제 요약
 
@@ -27,6 +27,11 @@
 SDPA는 ONNX opset 14+ 전용 → 다른 그래프 구조 생성.
 
 **해결**: `attn_implementation="eager"` + `opset_version=12`로 재변환 → **EN과 957 nodes 100% 동일 구조**.
+
+**검증 결과 (2026-03-18)**:
+- Pegasus 시뮬: argmax agreement **46.3% → 78.1%** (+31.8%p)
+- T527 NPU: 72MB NB, 415ms 추론, NPU vs FP32 agreement 89.9%
+- **한계**: non-blank 프레임 accuracy 0% — attention 분포 근본 원인은 미해결
 
 **영향 정도**: 중간. 근본 원인(attention 분포)이 지배적이지만, ONNX 구조가 양자화를 추가 악화시킴.
 **비용**: 0 (재변환만). 후속 모든 전략의 기반 ONNX로 사용해야 함.
