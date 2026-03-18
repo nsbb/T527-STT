@@ -1,6 +1,6 @@
 # 영어/한국어 Wav2Vec2 ONNX 구조 비교 분석
 
-> 작성일: 2026-03-18 | 상태: 분석 완료, 재변환 실행 대기
+> 작성일: 2026-03-18 | 상태: 재변환 + uint8 양자화 + 디바이스 검증 완료
 
 ## 요약
 
@@ -271,22 +271,67 @@ onnx.save(m, "wav2vec2_ko_base_3s_eager_op12.onnx")
 print("Done. Structure matches EN (957 nodes, opset 12).")
 ```
 
-### 기대 효과
+### 실측 결과 (2026-03-18)
 
-| 시나리오 | 결과 예측 | 근거 |
-|---------|----------|------|
-| **최선** | uint8 양자화 품질 개선 (argmax agreement 46% → 60-70%) | ONNX 구조 최적화 + Acuity 호환성 향상 |
-| **중간** | 약간의 개선 (46% → 50-55%) | 구조 차이는 중간 정도의 기여 요인 |
-| **최악** | 변화 없음 (46%) | 근본 원인(attention 분포)이 지배적 |
+재변환 후 실제 양자화 + 디바이스 테스트를 수행했다.
 
-> 구조 재변환은 **비용 0, 리스크 0**. 실행하지 않을 이유가 없다.
-> 이것만으로 해결되지 않더라도, QAT/Gated Attention 등 후속 전략의 **기반 ONNX**로 사용해야 한다.
+#### Pegasus 시뮬레이션 (10 samples)
+
+| 측정 | Old SDPA KO | **New Eager KO** | EN base-960h |
+|------|------------|-----------------|-------------|
+| **Argmax agreement (overall)** | 46.3% | **78.1% ± 9.5%** | ~85% |
+| Min / Max | — | 66.4% / 90.6% | — |
+
+→ 전체 argmax agreement **+31.8%p** 대폭 개선.
+
+#### T527 NPU 디바이스 테스트
+
+```
+입력: [1, 48000] uint8, scale=0.0666, zp=131
+출력: [1, 149, 56] uint8, scale=0.0690, zp=76
+추론 시간: 415ms (3초 모델)
+NB 크기: 72MB
+```
+
+- NPU vs FP32 argmax agreement: **89.9%**
+- NPU vs uint8 sim agreement: **97.3%** (시뮬레이션 정확)
+
+#### 핵심 한계: Non-blank 토큰 accuracy
+
+```
+FP32 non-pad frames: 13/149 (나머지 136은 [PAD])
+Non-pad 프레임에서의 accuracy: 0%
+```
+
+FP32에서 99%+ 확신도로 한글 자모(`ㄸ`, `ㅓ`, `ㄴ`, `ㅌ`, `ㅐ` 등)를 출력하는 프레임이
+uint8 양자화 후 **전부 `[PAD]`로 전환**됨.
+
+| 디코딩 | 텍스트 |
+|--------|-------|
+| FP32 | `ㄸㅓㄴ ㅌㅐ ㅇㅣ ㅂㅇㅡㄹ` |
+| uint8 NPU | `ㅔ ㅇ` |
+
+→ 전체 agreement는 높아도 (FP32도 91% [PAD]), 실제 음성 정보가 있는 프레임에서 양자화 파괴.
+
+### 결론
+
+| 시나리오 | 예측 | **실측** |
+|---------|------|---------|
+| **최선** | 60-70% | **78.1%** (예측 초과) |
+| **중간** | 50-55% | — |
+| **최악** | 46% | — |
+
+구조 재변환은 **예측을 초과하는 개선**을 가져왔다.
+그러나 non-blank accuracy 0%는 **근본 원인(attention 분포 차이)이 지배적**임을 확인.
+Eager opset12 ONNX를 기반으로 QAT(전략 A) 또는 Knowledge Distillation(전략 D2) 진행 필요.
 
 ---
 
 ## 9. 후속 작업
 
-1. **즉시**: eager opset 12로 재변환 → Acuity uint8 양자화 → Pegasus 시뮬레이션 (argmax agreement 측정)
-2. **개선 시**: NB 생성 → T527 디바이스 테스트 → CER 측정
-3. **변화 없을 시**: 재변환된 ONNX를 기반으로 QAT 학습 진행 (전략서 전략 A)
-4. **참고**: 5초 모델(`INPUT_LENGTH=80000`)로도 동시 변환하여 비교 가능
+1. ~~즉시: eager opset 12로 재변환~~ ✅ 완료 (957 nodes, 377.9MB)
+2. ~~양자화 + 시뮬레이션~~ ✅ 완료 (argmax agreement 78.1%)
+3. ~~NB 생성 + 디바이스 테스트~~ ✅ 완료 (72MB NB, 415ms, non-blank accuracy 0%)
+4. **QAT (전략 A)**: 재변환된 ONNX 기반으로 양자화 인식 학습 → attention 분포 강화
+5. **Knowledge Distillation (전략 D2)**: Transformer teacher → CNN student
+6. **참고**: 5초 모델(`INPUT_LENGTH=80000`)로도 변환 가능
