@@ -3,6 +3,8 @@
 Kkonjeong/wav2vec2-base-korean. 한국어 STT, T527 NPU 양자화. **전부 실패.**
 
 > **[양자화 실패 분석 보고서 (wav2vec2_korean_npu_analysis.md)](wav2vec2_korean_npu_analysis.md)** — 현상분석, 원인분석(가중치 비교, activation range), HuggingFace 모델 전수 조사, 해결 방안(QAT)
+>
+> **[해결 전략서 (korean_wav2vec2_solution_strategy.md)](korean_wav2vec2_solution_strategy.md)** — Attention 분포 근본 원인, QAT/Gated Attention/Clipped Softmax/Layer 축소/QuartzNet 전략, 실행 순서
 
 ## 결과: 60종+ 시도, 21종 NPU 실측, 전부 실패
 
@@ -227,6 +229,8 @@ base-korean/
 | 파일 | 설명 |
 |------|------|
 | [wav2vec2_korean_npu_analysis.md](wav2vec2_korean_npu_analysis.md) | 양자화 실패 분석 보고서 (현상분석, 원인분석, 결론, HuggingFace 전수 조사) |
+| [korean_wav2vec2_solution_strategy.md](korean_wav2vec2_solution_strategy.md) | T527 NPU 배포 해결 전략서 (QAT, Gated Attention, Layer 축소, QuartzNet) |
+| [onnx_structure_comparison.md](onnx_structure_comparison.md) | EN/KO ONNX 구조 비교 (SDPA vs eager, opset 14 vs 12, 957 vs 1306 nodes) |
 
 ### 테스트 결과 CSV
 
