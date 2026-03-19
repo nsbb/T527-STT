@@ -10,12 +10,14 @@ ONNX float baseline CER: 16.2% (4 Korean test samples)
 
 ## 양자화 실험 결과
 
-| 양자화 | NB 크기 | Encoder 출력 상관계수 | CER | 비고 |
-|--------|---------|---------------------|-----|------|
-| uint8 asymmetric_affine | 63MB | 0.627 | **100%** | state input 수동 교정 |
-| int16 dynamic_fixed_point | 118MB | 0.643 | **100%** | 300개 노드 수동 교정 |
-| PCQ int8 perchannel_symmetric | 71MB | 0.275 | **100%** | 오히려 악화 |
-| bf16 bfloat16 | — | — | — | export 실패 (error 64768) |
+| 양자화 | NB 크기 | T527 NPU 실행 | Encoder 출력 상관계수 | CER | 비고 |
+|--------|---------|-------------|---------------------|-----|------|
+| uint8 asymmetric_affine | 63MB | **정상 동작** | 0.627 | **100%** | state input 수동 교정 |
+| int16 dynamic_fixed_point | 118MB | **정상 동작** | 0.643 | **100%** | 300개 노드 수동 교정 |
+| PCQ int8 perchannel_symmetric | 71MB | **정상 동작** | 0.275 | **100%** | 오히려 악화 |
+| bf16 bfloat16 | — | — | — | — | export 실패 (error 64768) |
+
+> **참고**: uint8/int16/PCQ 모두 T527 NPU에서 **정상 실행**됨 (crash/hang 없음). 출력이 나오긴 하나 양자화 에러 누적으로 의미없는 값. 특히 **int16 (118MB)이 T527 NPU에서 정상 동작**한 것은 이전 Wav2Vec2 int16 (153MB) 실패가 "int16 미지원"이 아니라 **NB 크기 제한** 때문이었음을 증명.
 
 ### 실패 원인
 

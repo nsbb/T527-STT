@@ -9,7 +9,7 @@ Allwinner T527 NPU (Vivante VIP9000NANOSI_PLUS) 용 음성인식 모델 모음.
 |------|------|---------|--------|-----|----------|----------|-----|---------|
 | [KoCitrinet](ko_citrinet/) | 한국어 | 1D Conv + SE (CTC) | int8 | **44.44%** | 3초 | 120ms | 0.04 | 62MB |
 | [Wav2Vec2](wav2vec2/) | 영어 | CNN + Transformer (CTC) | uint8 | **17.52%** | 5초 | 715ms | 0.14 | 87MB |
-| [Zipformer](zipformer/) | 한국어 | Zipformer (RNN-T) | uint8 | 미측정 | 스트리밍 (~0.4초/청크) | 미측정 | 미측정 | 68MB |
+| [Zipformer](zipformer/) | 한국어 | Zipformer (RNN-T) | uint8/int16/PCQ | **100%** (실패) | 스트리밍 (~0.4초/청크) | ~50ms/chunk | — | 63~118MB |
 | [CitriNet EN](citrinet_en/) | 영어 | 1D Conv + SE (CTC) | uint8 | 미측정 | 3초 | 미측정 | 미측정 | 7MB |
 | [DeepSpeech2](deepspeech2/) | 영어 | RNN (CTC) | uint8 | 미측정 | ~4.7초 (756f) | 미측정 | 미측정 | 56MB |
 
@@ -48,12 +48,12 @@ Allwinner T527 NPU (Vivante VIP9000NANOSI_PLUS) 용 음성인식 모델 모음.
 |---------|------|------|---------------|
 | asymmetric_affine (uint8) | O | O | **동작** |
 | perchannel_symmetric (PCQ int8) | O | O | **동작** |
-| dynamic_fixed_point (int16) | O | O | HANG |
+| dynamic_fixed_point (int16) | O | O | **동작** (NB ≤118MB), status=-1 (NB ≥153MB) |
 | bfloat16 / qbfloat16 | O | O | segfault / HANG |
 | float16 (`--dtype float16`) | X | **O** | 동작 (셰이더 에뮬레이션, 25배 느림) |
 | e4m3 / e5m2 (FP8) | X | **O** | 미테스트 |
 
-> **결론**: T527 NPU에서 실용적인 양자화는 **uint8/int8만**. fp16은 NB 생성·실행 가능하나 하드웨어 가속 아님 (17.7초 vs uint8 0.7초).
+> **결론**: T527 NPU에서 실용적인 양자화는 **uint8/int8**. int16 DFP도 NB 크기 ≤118MB이면 동작 확인 (Zipformer encoder), 다만 153MB 이상은 status=-1. fp16은 NB 생성·실행 가능하나 하드웨어 가속 아님 (17.7초 vs uint8 0.7초).
 
 ### 주요 차이점
 
@@ -108,17 +108,18 @@ adb pull /data/local/tmp/test/output_0.dat .
 
 ### T527 NPU 양자화 제약
 
-- **uint8만 안정 동작** — int16/DFP는 NPU HANG 발생 (물리적 리셋 필요)
-- **bf16 NB 생성 실패** — Acuity gen_nbg segfault
-- **Transformer 모델 한국어 불가** — Wav2Vec2 한국어 50종+ 시도, 전부 실패 (uint8 양자화 열화 누적)
-- **CNN 모델만 한국어 가능** — CitriNet (1D Conv) 계열만 의미 있는 출력
+- **uint8 안정 동작** — 모든 모델에서 NB 생성·실행 가능
+- **int16 DFP 조건부 동작** — NB 크기 ≤118MB이면 정상 실행 (Zipformer int16 118MB 동작 확인). ≥153MB면 status=-1 (Wav2Vec2 int16 153MB 실패). 이전 "T527 NPU는 int16 미지원" 결론은 **오류** — NB 크기 제한이 원인이었음.
+- **bf16 NB 생성 실패** — Acuity gen_nbg segfault 또는 export error 64768
+- **대형 Transformer 양자화 한계** — 5868노드(Zipformer)는 uint8/int16 모두 CER 100% (에러 누적). ~2000노드(Wav2Vec2 영어)는 uint8 CER 17.5% 성공
+- **CNN 모델 한국어 가능** — CitriNet (1D Conv) 계열만 한국어 의미 있는 출력
 
 ### 모델별 상세 결과
 
 각 모델 폴더의 README.md 참조:
 - [KoCitrinet](ko_citrinet/): CER 44.44%, 120ms — **한국어 유일한 선택**
 - [Wav2Vec2](wav2vec2/): 영어 CER 17.52%, 한국어 불가능 — [상세 분석](wav2vec2/)
-- [Zipformer](zipformer/): NB 변환 완료, 디바이스 테스트 대기
+- [Zipformer](zipformer/): uint8/int16/PCQ 전 방식 CER 100% 실패 — [상세 결과](zipformer/)
 - [CitriNet EN](citrinet_en/): NB 변환 완료, 디바이스 테스트 대기
 - [DeepSpeech2](deepspeech2/): NB 변환 완료, 디바이스 테스트 대기
 - [테스트셋](testset/): 평가용 음성 데이터 — [자사 수집(ailab)](testset/ailab/), [영어(LibriSpeech)](testset/base_english/), [한국어(Zeroth-Korean)](testset/base_korean/)
