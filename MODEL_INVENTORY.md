@@ -13,7 +13,7 @@
 | 3 | Wav2Vec2 base-korean 3s | 한국어 | ONNX float (CPU) | - | CPU only | **33.74%** | 75ms(서버) | 서버용만 가능 |
 | 4 | Wav2Vec2 base-korean 3s | 한국어 | uint8 (300 calib) | 72MB | 동작 | 100.86% | 415ms | **실패** |
 | 5 | Wav2Vec2 base-korean 3s | 한국어 | fp16 (182MB) | 182MB | CPU fallback | - | 17,740ms | **실패** (HW 미가속) |
-| 6 | Wav2Vec2 base-korean 3s | 한국어 | dfp16 i16 (153MB) | 153MB | status=-1 | - | - | **실패** (리소스 부족) |
+| 6 | Wav2Vec2 base-korean 3s | 한국어 | dfp16 i16 (153MB) | 153MB | status=-1 | - | - | **실패** (NB 크기 초과, int16 자체는 지원) |
 | 7 | Wav2Vec2 XLS-R-300M 3s | 한국어 | uint8 | 249MB | 동작 | ALL PAD | 1098ms | **실패** |
 | 8 | Zipformer Encoder | 한국어 | uint8 | 63MB | 동작 | 100% | ~50ms/chunk | **실패** |
 | 9 | Zipformer Encoder | 한국어 | int16 | 118MB | 동작 | 100% | ~50ms/chunk | **실패** |
