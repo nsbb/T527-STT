@@ -4,52 +4,69 @@ sherpa-onnx-streaming-zipformer-korean-2024-06-16 기반. RNN-Transducer 구조 
 
 ## 상태
 
-**NB 변환 완료, 디바이스 테스트 미완료.**
+**양자화 실패 — uint8 / int16 / PCQ / bf16 전 방식 CER 100%**
+
+ONNX float baseline CER: 16.2% (4 Korean test samples)
+
+## 양자화 실험 결과
+
+| 양자화 | NB 크기 | Encoder 출력 상관계수 | CER | 비고 |
+|--------|---------|---------------------|-----|------|
+| uint8 asymmetric_affine | 63MB | 0.627 | **100%** | state input 수동 교정 |
+| int16 dynamic_fixed_point | 118MB | 0.643 | **100%** | 300개 노드 수동 교정 |
+| PCQ int8 perchannel_symmetric | 71MB | 0.275 | **100%** | 오히려 악화 |
+| bf16 bfloat16 | — | — | — | export 실패 (error 64768) |
+
+### 실패 원인
+
+1. **양자화 에러 누적**: 5868개 노드의 sequential quantization으로 encoder 출력 상관계수 0.6 수준. Decoder/Joiner가 의미있는 토큰 생성 불가.
+2. **Acuity multi-input 캘리브레이션 버그**: 31개 입력 모델에서 state 입력 calibration 데이터를 무시. 30개 state가 모두 scale=1.0/zp=0 또는 fl=300으로 설정됨.
+3. **비트 수 증가 무효**: int16 (2배 정밀도)도 상관계수 개선 미미 (0.627→0.643).
+
+### 동일 NPU 양자화 비교
+
+| 모델 | 노드 수 | 구조 | uint8 CER |
+|------|---------|------|-----------|
+| KoCitrinet | ~200 | 1D Conv (CTC) | 44.44% (성공) |
+| Wav2Vec2 base | ~2000 | 12L Transformer (CTC) | ~17.5% (성공) |
+| **Zipformer** | **5868** | **5-stack Transformer (RNN-T)** | **100% (실패)** |
 
 ## 모델 구성
 
 | 컴포넌트 | NB 크기 | 양자화 | 입력 | 출력 |
 |----------|---------|--------|------|------|
-| Encoder | 63MB | uint8 | `[1, 39, 80]` + 캐시 31개 | `[1, 8, 512]` |
+| Encoder | 63MB | uint8 | `[1, 39, 80]` + 캐시 30개 | `[1, 8, 512]` + 캐시 30개 |
 | Decoder | 2.8MB | int32 입력 | `[1, 2]` int32 (토큰 ID) | `[1, 512]` uint8 |
 | Joiner | 1.9MB | float16 입력 | `[1, 512]` × 2 (enc+dec) | `[1, 5000]` uint8 |
-| **합계** | **68MB** | — | — | — |
 
 ## Encoder 입력 상세
 
 주 입력:
-- `x`: `[1, 39, 80]` uint8 — mel-spectrogram 프레임 (scale=0.02136, zp=125)
+- `x`: `[1, 39, 80]` — mel-spectrogram 프레임
 
-캐시 상태 (31개, 모두 uint8, 초기값 0):
+캐시 상태 (30개, 초기값 0):
 - `cached_avg_0~4`: 어텐션 평균 캐시
 - `cached_key_0~4`: 어텐션 키 캐시
 - `cached_val_0~4`: 어텐션 값 캐시
 - `cached_val2_0~4`: 어텐션 값2 캐시
 - `cached_conv1_0~4`: 컨볼루션 캐시1
 - `cached_conv2_0~4`: 컨볼루션 캐시2
-- `cached_len` (int32): 프레임 카운터
 
-## Decoder 입력
+## 테스트셋
 
-- `y`: `[1, 2]` **int32** — 직전 2개 토큰 ID (비양자화)
+`test_wavs/` — 4개 한국어 WAV (KSS Dataset)
 
-## Joiner 입력
-
-- `encoder_out`: `[1, 512]` **float16** — Encoder 출력 (비양자화)
-- `decoder_out`: `[1, 512]` **float16** — Decoder 출력 (비양자화)
-- 출력: `[1, 5000]` uint8 → argmax → 토큰 ID
+| 파일 | 텍스트 |
+|---|---|
+| 0.wav | 그는 괜찮은 척하려고 애쓰는 것 같았다. |
+| 1.wav | 지하철에서 다리를 벌리고 앉지 마라. |
+| 2.wav | 부모가 저지르는 큰 실수 중 하나는 자기 아이를 다른 집 아이와 비교하는 것이다. |
+| 3.wav | 주민등록증을 보여 주시겠어요? |
 
 ## 보캡
 
 - **5,000 BPE 토큰** (`tokens.txt`)
 - SentencePiece BPE 토크나이저 (`bpe.model`)
-
-## 아키텍처
-
-- **Zipformer**: 효율적인 Transformer 변형 (downsampling + bypass)
-- **RNN-Transducer**: Encoder + Decoder + Joiner 3단 구조
-- **스트리밍**: 청크 단위 추론 (39프레임 = ~390ms)
-- **학습**: k2-fsa/icefall, 한국어 데이터
 
 ## 파일 구조
 
@@ -59,9 +76,9 @@ zipformer/
 ├── bpe.model              # SentencePiece BPE 토크나이저
 ├── tokens.txt             # 5,000 BPE 토큰
 ├── encoder/
-│   ├── network_binary.nb  # 63MB, uint8
+│   ├── network_binary.nb  # 63MB, uint8 (CER 100%, 사용불가)
 │   ├── nbg_meta.json
-│   └── sample_zeros.txt   # 제로 입력 테스트용
+│   └── sample_zeros.txt
 ├── decoder/
 │   ├── network_binary.nb  # 2.8MB
 │   └── nbg_meta.json
@@ -70,31 +87,14 @@ zipformer/
     └── nbg_meta.json
 ```
 
-## 과제
-
-1. **Encoder 캐시 31개 입력** — vpm_run/awnn에서 다중 입력 처리 필요
-2. **Joiner float16 입력** — Encoder/Decoder 출력을 float16으로 변환 후 전달
-3. **RNN-T 디코딩 루프** — Encoder 1회 → Decoder/Joiner 반복 (greedy search)
-4. **스트리밍 상태 관리** — 이전 청크의 캐시를 다음 청크에 전달
-
-## 디바이스 테스트 방법 (예정)
-
-```bash
-# 1. Encoder 테스트 (제로 입력)
-adb push encoder/network_binary.nb /data/local/tmp/zipformer/
-# 32개 입력 파일 생성 필요 (x + 31 caches)
-
-# 2. Decoder 테스트
-adb push decoder/network_binary.nb /data/local/tmp/zipformer/
-# int32 입력 [1, 2] 생성
-
-# 3. Joiner 테스트
-adb push joiner/network_binary.nb /data/local/tmp/zipformer/
-# float16 입력 2개 [1, 512] 생성
-```
-
 ## 원본 모델
 
 - **이름**: sherpa-onnx-streaming-zipformer-korean-2024-06-16
 - **프레임워크**: k2-fsa/icefall (PyTorch → ONNX)
-- **원본 ONNX**: encoder-epoch-99-avg-1.int8.onnx (63MB), decoder-epoch-99-avg-1.onnx (2.8MB), joiner-epoch-99-avg-1.int8.onnx (1.9MB)
+- **Encoder ONNX**: 280MB, 5868 nodes, 31 inputs, 31 outputs
+- **테스트/양자화 스크립트**: `ai-sdk/models/zipformer/` 참조
+
+## 결론
+
+> T527 NPU (Acuity 6.12.0)로는 5868노드 transformer encoder 양자화 불가.
+> CNN 기반(~200노드) 또는 중간 크기 transformer(~2000노드)까지만 사용 가능.

@@ -15,7 +15,9 @@
 | 5 | Wav2Vec2 base-korean 3s | 한국어 | fp16 (182MB) | 182MB | CPU fallback | - | 17,740ms | **실패** (HW 미가속) |
 | 6 | Wav2Vec2 base-korean 3s | 한국어 | dfp16 i16 (153MB) | 153MB | status=-1 | - | - | **실패** (리소스 부족) |
 | 7 | Wav2Vec2 XLS-R-300M 3s | 한국어 | uint8 | 249MB | 동작 | ALL PAD | 1098ms | **실패** |
-| 8 | Zipformer Encoder | 한국어 | uint8 | 63MB | 미테스트 | - | - | NB 생성완료 |
+| 8 | Zipformer Encoder | 한국어 | uint8 | 63MB | 동작 | 100% | ~50ms/chunk | **실패** |
+| 9 | Zipformer Encoder | 한국어 | int16 | 118MB | 동작 | 100% | ~50ms/chunk | **실패** |
+| 10 | Zipformer Encoder | 한국어 | PCQ int8 | 71MB | 동작 | 100% | ~50ms/chunk | **실패** |
 
 ---
 
@@ -142,19 +144,39 @@ fp16 NPU 테스트 결과: `t527-stt/wav2vec2/base-korean/test_results_fp16_npu.
 
 ---
 
-## 5. Zipformer Korean (NB 생성완료, 미테스트)
+## 5. Zipformer Korean (양자화 실패 — 전 방식)
 
 **원본 모델**: `sherpa-onnx-streaming-zipformer-korean-2024-06-16`
+- 아키텍처: 5-stack Zipformer encoder (5868 nodes), RNN-Transducer
+- 입력: `[1, 39, 80]` mel + 30 cached state tensors (streaming)
+- 출력: `[1, 8, 512]` encoder_out + 30 new state tensors
+- ONNX baseline CER: **16.2%** (4 Korean test samples, KSS Dataset)
 
-**파일 위치**: `ai-sdk/models/zipformer/bundle_uint8/`
+**파일 위치**: `ai-sdk/models/zipformer/zipformer_encoder_folded4/`
+
+### Encoder 양자화 결과 (모두 실패)
+
+| 양자화 | NB크기 | ONNX 대비 상관계수 | CER | 비고 |
+|--------|--------|-------------------|-----|------|
+| uint8 asymmetric_affine | 63MB | 0.627 | **100%** | state input 수동 교정 |
+| int16 dynamic_fixed_point | 118MB | 0.643 | **100%** | state+내부 300개 노드 수동 교정 |
+| PCQ int8 perchannel_symmetric | 71MB | 0.275 | **100%** | 오히려 악화 |
+| bf16 bfloat16 | — | — | — | export 실패 (error 64768) |
+
+### 실패 원인
+
+1. **양자화 에러 누적**: 5868개 노드 sequential quantization → encoder 출력 상관계수 0.6 수준
+2. **Acuity multi-input 캘리브레이션 버그**: 31개 입력 모델에서 state 입력 calibration 무시 (scale=1.0/fl=300)
+3. int16 (2배 정밀도)도 correlation 개선 미미 (0.627→0.643)
+
+### Decoder/Joiner NB (정상 변환, 사용 불가)
 
 | 컴포넌트 | NB크기 | 상태 |
 |----------|--------|------|
-| Encoder | 63MB | NB 생성완료 |
-| Decoder | 2.8MB | NB 생성완료 |
-| Joiner | 1.9MB | NB 생성완료 |
+| Decoder | 2.8MB | NB 생성완료 (Encoder 실패로 무의미) |
+| Joiner | 1.9MB | NB 생성완료 (Encoder 실패로 무의미) |
 
-> Encoder+Decoder+Joiner 3개를 연동하는 Android 파이프라인 미구현
+> 5868노드 transformer encoder는 Acuity 6.12.0 양자화 한계를 초과. CNN 기반 모델(Citrinet, ~200노드)이나 중간 크기 transformer(Wav2Vec2, ~2000노드)까지만 가능.
 
 ---
 
@@ -165,5 +187,8 @@ T527 NPU에서 **실제 사용 가능한 STT 모델은 2개**:
 1. **KoCitrinet 300f int8** — 한국어, CER 44.44%, 120ms (운용중)
 2. **Wav2Vec2 base-960h uint8** — 영어, CER ~17.52%, 715ms (검증완료)
 
-한국어 Wav2Vec2는 ONNX float CER 33.74%로 KoCitrinet보다 우수하나,
-T527 NPU uint8 양자화가 출력을 완전히 파괴하여 사용 불가.
+**실패한 모델**:
+- 한국어 Wav2Vec2 (base-korean) — ONNX CER 33.74%이나 T527 uint8 양자화 실패
+- Zipformer — ONNX CER 16.2%이나 uint8/int16/PCQ/bf16 **전 방식 실패** (5868노드 에러 누적)
+
+**T527 NPU 양자화 경험칙**: CNN 기반(~200노드) 또는 12L 이하 transformer(~2000노드)까지 가능. 5-stack transformer(5868노드)는 불가.
