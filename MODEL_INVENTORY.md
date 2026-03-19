@@ -6,18 +6,40 @@
 
 ## 최종 성능 요약
 
-| # | 모델 | 언어 | 양자화 | NB크기 | T527 NPU | CER | 추론시간 | 상태 |
-|---|------|------|--------|--------|----------|-----|----------|------|
-| 1 | KoCitrinet 300f | 한국어 | int8 asymmetric | 62MB | 동작 | **44.44%** | 120ms | **운용중** |
-| 2 | Wav2Vec2 base-960h 5s | 영어 | uint8 asymmetric | 88MB | 동작 | **~17.52%** | 715ms | 검증완료 |
-| 3 | Wav2Vec2 base-korean 3s | 한국어 | ONNX float (CPU) | - | CPU only | **33.74%** | 75ms(서버) | 서버용만 가능 |
-| 4 | Wav2Vec2 base-korean 3s | 한국어 | uint8 (300 calib) | 72MB | 동작 | 100.86% | 415ms | **실패** |
-| 5 | Wav2Vec2 base-korean 3s | 한국어 | fp16 (182MB) | 182MB | CPU fallback | - | 17,740ms | **실패** (HW 미가속) |
-| 6 | Wav2Vec2 base-korean 3s | 한국어 | dfp16 i16 (153MB) | 153MB | status=-1 | - | - | **실패** (NB 크기 초과, int16 자체는 지원) |
-| 7 | Wav2Vec2 XLS-R-300M 3s | 한국어 | uint8 | 249MB | 동작 | ALL PAD | 1098ms | **실패** |
-| 8 | Zipformer Encoder | 한국어 | uint8 | 63MB | 동작 | 100% | ~50ms/chunk | **실패** |
-| 9 | Zipformer Encoder | 한국어 | int16 | 118MB | 동작 | 100% | ~50ms/chunk | **실패** |
-| 10 | Zipformer Encoder | 한국어 | PCQ int8 | 71MB | 동작 | 100% | ~50ms/chunk | **실패** |
+| # | 모델 | 언어 | ONNX 크기 | 양자화 | NB 크기 | T527 NPU | CER | 추론시간 | 상태 |
+|---|------|------|----------|--------|---------|----------|-----|----------|------|
+| 1 | KoCitrinet 300f | 한국어 | 543MB | int8 asymmetric | 62MB | 동작 | **44.44%** | 120ms | **운용중** |
+| 2 | KoCitrinet 500f | 한국어 | 543MB | int8 asymmetric | 62MB | 동작 | 미측정 | ~120ms | 탑재완료 |
+| 3 | KoCitrinet 300f | 한국어 | 543MB | int16 | 미시도 | — | — | — | **미시도** |
+| 4 | Wav2Vec2 base-960h 5s | 영어 | 361MB | uint8 asymmetric | 88MB | 동작 | **~17.52%** | 715ms | 검증완료 |
+| 5 | Wav2Vec2 base-960h 5s | 영어 | 361MB | int16 DFP | 152MB | status=-1 | — | — | **실패** (NB 크기 초과) |
+| 6 | Wav2Vec2 base-korean 3s | 한국어 | 361MB | ONNX float (CPU) | — | CPU only | **33.74%** | 75ms(서버) | 서버용만 가능 |
+| 7 | Wav2Vec2 base-korean 3s | 한국어 | 361MB | uint8 (300 calib) | 72MB | 동작 | 100.86% | 415ms | **실패** |
+| 8 | Wav2Vec2 base-korean 3s | 한국어 | 361MB | int16 DFP | 153MB | status=-1 | — | — | **실패** (NB 크기 초과) |
+| 9 | Wav2Vec2 base-korean 3s | 한국어 | 361MB | fp16 | 182MB | CPU fallback | — | 17,740ms | **실패** (HW 미가속) |
+| 10 | Wav2Vec2 XLS-R-300M 3s | 한국어 | 1.2GB | uint8 | 249MB | 동작 | ALL PAD | 1098ms | **실패** |
+| 11 | CitriNet EN 3s | 영어 | 40MB | uint8 | 7MB | 동작 | 미측정 | 미측정 | NB 변환완료 |
+| 12 | CitriNet EN 3s | 영어 | 40MB | fp16 | 21MB | 미측정 | 미측정 | 미측정 | NB 변환완료 |
+| 13 | DeepSpeech2 | 영어 | — | uint8 | 56MB | 동작 | 미측정 | 미측정 | NB 변환완료 |
+| 14 | Zipformer Encoder | 한국어 | 280MB | uint8 | 63MB | **동작** | 100% | ~50ms/chunk | **실패** (에러 누적) |
+| 15 | Zipformer Encoder | 한국어 | 280MB | int16 DFP | 118MB | **동작** | 100% | ~50ms/chunk | **실패** (에러 누적) |
+| 16 | Zipformer Encoder | 한국어 | 280MB | PCQ int8 | 71MB | **동작** | 100% | ~50ms/chunk | **실패** (에러 누적) |
+| 17 | Zipformer Decoder | 한국어 | 11MB | uint8 | 2.8MB | 동작 | — | — | Encoder 실패로 무의미 |
+| 18 | Zipformer Joiner | 한국어 | 9.8MB | uint8 | 1.9MB | 동작 | — | — | Encoder 실패로 무의미 |
+
+### int16 DFP (dynamic_fixed_point) T527 NPU 지원 여부
+
+이전에 "T527 NPU는 int16 미지원"이라 결론 내렸으나 **오류였음**. Zipformer encoder int16 (118MB)이 정상 동작 확인:
+
+| 모델 | int16 NB 크기 | T527 결과 | 비고 |
+|------|-------------|-----------|------|
+| Zipformer Encoder | **118MB** | **정상 동작** (쓰레기값이지만 crash 없음) | int16 지원 증명 |
+| Wav2Vec2 base-korean | 153MB | status=-1 (실행 거부) | NB 크기 제한이 원인 |
+| Wav2Vec2 base-960h EN | 152MB | status=-1 (실행 거부) | NB 크기 제한이 원인 |
+| Wav2Vec2 XLS-R 12L | 262MB | 미테스트 | 크기 초과 예상 |
+| KoCitrinet | 미시도 | — | ONNX 543MB → int16 NB ~120MB 예상, 시도 가치 있음 |
+
+> **결론**: T527 NPU는 int16 DFP를 **지원함**. 실패 원인은 NB 크기 제한 (~120MB 이하 필요). KoCitrinet int16은 NB ~120MB로 예상되어 동작 가능성 있음 (미시도).
 
 ---
 
