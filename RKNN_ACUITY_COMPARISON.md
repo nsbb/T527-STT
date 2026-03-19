@@ -1,6 +1,8 @@
-# T527 NPU 개선 방향 — rknn-stt 기법 적용
+# RKNN vs Acuity 양자화 비교 — RK3588 기법의 T527 적용 방안
 
-rknn-stt (RK3588 NPU)에서 wav2vec2 CER 35.96% → 11.78%를 달성한 3가지 핵심 기법을 T527 NPU에 적용하는 방안.
+RK3588 NPU (RKNN-Toolkit2)에서 wav2vec2 CER 35.96% → 11.78%를 달성한 핵심 기법을 T527 NPU (Acuity 6.12.0)에 적용하는 방안.
+
+> 원본: [nsbb/rknn-stt](https://github.com/nsbb/rknn-stt) — RK3588 NPU 한국어 STT 프로젝트
 
 ---
 

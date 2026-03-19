@@ -1230,7 +1230,7 @@ training_args = TrainingArguments(
 
 ### 10.2 최종 분석
 
-1. **T527 NPU에서 한국어 Wav2Vec2 STT는 불가능** — 50종+ 변형, 21종 NPU 실측. uint8은 garbled, int16은 NPU HANG, 소형 모델은 실행 거부. 어떤 조합으로도 의미 있는 한국어 텍스트를 얻을 수 없다.
+1. **T527 NPU에서 한국어 Wav2Vec2 STT는 현재 불가** — 50종+ 변형, 21종 NPU 실측. uint8은 garbled, int16은 NB 크기 초과(153MB > ~128MB 제한)로 status=-1. 단, int16 자체는 T527 NPU에서 지원됨 (Zipformer 118MB 정상 동작 확인). **Split 분할로 파트별 128MB 이하로 줄이면 가능성 있음** → [RKNN vs Acuity 비교 문서](../RKNN_ACUITY_COMPARISON.md) 참조.
 
 2. **KoCitrinet(CNN 기반)이 T527 NPU 한국어 STT의 유일한 선택지:**
 
@@ -1247,7 +1247,7 @@ training_args = TrainingArguments(
    - Transformer 기반(Wav2Vec2): attention softmax, layer normalization 등 정밀도 민감 연산이 uint8의 256단계 해상도에서 오류 누적 → **양자화 부적합** (한국어 모델)
    - 영어 모델만 성공한 이유: 입력 범위가 25배 좁아 양자화 step size가 작고, 오차 누적이 상대적으로 적음
 
-4. **int16 DFP의 아이러니:** 시뮬레이션에서 FP32와 100% 동일한 출력을 확인했으나, T527 NPU가 DFP 양자화 형식을 하드웨어적으로 지원하지 않아 실행 불가. **소프트웨어적으로 완벽한 해결책이 하드웨어 제약으로 사용 불가.**
+4. **int16 DFP 업데이트:** 이전에 "T527 NPU가 int16 미지원"으로 결론 냈으나 **오류였음**. Zipformer encoder int16 NB (118MB)가 T527 NPU에서 정상 동작 확인. Wav2Vec2 int16 (153MB) 실패는 **NB 크기 제한 (~128MB)** 이 원인. 모델을 Split하여 파트당 128MB 이하로 줄이면 int16 활용 가능.
 
 5. **실시간 처리:** 동작하는 모든 모델이 실시간보다 빠르다.
    - KoCitrinet: 3초 오디오를 0.12초에 처리 → **25배 실시간**
@@ -1255,11 +1255,14 @@ training_args = TrainingArguments(
 
 ### 10.3 NPU 성능 비교 (타 플랫폼)
 
-| 플랫폼 | 양자화 | RTF | 비교 |
-|--------|--------|-----|------|
-| **T527 NPU** (Vivante VIP9000) | uint8 | **0.143** | 기준 |
-| RK3588 NPU | fp16 | 0.15 | T527과 유사 |
-| RTX A6000 GPU | fp16 | 0.007 | T527의 ~20배 빠름 |
+| 플랫폼 | 양자화 | RTF | CER (한국어) | 비고 |
+|--------|--------|-----|-------------|------|
+| **T527 NPU** (Vivante VIP9000) | uint8 | **0.143** | 불가 (garbled) | 2 TOPS, 1코어 |
+| **RK3588 NPU** (RKNN) | INT8-KL+FP16 Split | 0.085 | **11.78%** | 6 TOPS, 3코어 |
+| RTX A6000 GPU | fp16 | 0.007 | — | 참고용 |
+
+> RK3588에서는 Split INT8+FP16 + amplitude normalization + KL divergence 조합으로 CER 11.78% 달성.
+> T527에 동일 기법 적용 방안: [RKNN vs Acuity 비교 문서](../RKNN_ACUITY_COMPARISON.md)
 
 ---
 
