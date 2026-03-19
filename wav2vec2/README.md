@@ -15,6 +15,8 @@
 11. [재현 방법](#11-재현-방법)
 12. [부록](#부록-a-파일-구조)
 
+> **참고:** RK3588 NPU에서 동일 모델로 CER 11.78% 달성한 기법(Split INT8+FP16, amplitude norm, KL divergence)과 T527 적용 방안 → [RKNN vs T527 비교 문서](RKNN_COMPARISON.md)
+
 ---
 
 ## 1. 개요
@@ -1230,7 +1232,7 @@ training_args = TrainingArguments(
 
 ### 10.2 최종 분석
 
-1. **T527 NPU에서 한국어 Wav2Vec2 STT는 현재 불가** — 50종+ 변형, 21종 NPU 실측. uint8은 garbled, int16은 NB 크기 초과(153MB > ~128MB 제한)로 status=-1. 단, int16 자체는 T527 NPU에서 지원됨 (Zipformer 118MB 정상 동작 확인). **Split 분할로 파트별 128MB 이하로 줄이면 가능성 있음** → [RKNN vs Acuity 비교 문서](../RKNN_ACUITY_COMPARISON.md) 참조.
+1. **T527 NPU에서 한국어 Wav2Vec2 STT는 현재 불가** — 50종+ 변형, 21종 NPU 실측. uint8은 garbled, int16은 NB 크기 초과(153MB > ~128MB 제한)로 status=-1. 단, int16 자체는 T527 NPU에서 지원됨 (Zipformer 118MB 정상 동작 확인). **Split 분할로 파트별 128MB 이하로 줄이면 가능성 있음** → [RKNN vs Acuity 비교 문서](RKNN_COMPARISON.md) 참조.
 
 2. **KoCitrinet(CNN 기반)이 T527 NPU 한국어 STT의 유일한 선택지:**
 
@@ -1262,7 +1264,7 @@ training_args = TrainingArguments(
 | RTX A6000 GPU | fp16 | 0.007 | — | 참고용 |
 
 > RK3588에서는 Split INT8+FP16 + amplitude normalization + KL divergence 조합으로 CER 11.78% 달성.
-> T527에 동일 기법 적용 방안: [RKNN vs Acuity 비교 문서](../RKNN_ACUITY_COMPARISON.md)
+> T527에 동일 기법 적용 방안: [RKNN vs Acuity 비교 문서](RKNN_COMPARISON.md)
 
 ---
 

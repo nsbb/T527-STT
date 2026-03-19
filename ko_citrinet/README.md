@@ -2,6 +2,8 @@
 
 NVIDIA NeMo CitriNet 기반 한국어 STT 모델. T527 NPU int8 양자화.
 
+> **참고:** RK3588 NPU에서의 동일 모델 FP16 실행 결과(52.5ms, cosine 0.9999)와 T527 개선 방안 → [RKNN vs T527 비교 문서](RKNN_COMPARISON.md)
+
 ## 성능
 
 | 평가 | 앱 | CER | exact | 추론시간 | 샘플 수 |

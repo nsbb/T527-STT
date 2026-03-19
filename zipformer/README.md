@@ -2,6 +2,8 @@
 
 sherpa-onnx-streaming-zipformer-korean-2024-06-16 기반. RNN-Transducer 구조 (Encoder + Decoder + Joiner).
 
+> **참고:** RK3588 NPU에서는 동일 모델로 CER 21.85% 달성 (INT8 KL + CumSum 패치). T527과의 차이 분석 → [RKNN vs T527 비교 문서](RKNN_COMPARISON.md)
+
 ## 상태
 
 **양자화 실패 — uint8 / int16 / PCQ / bf16 전 방식 CER 100%**
