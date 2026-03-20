@@ -176,3 +176,40 @@ Part3 (uint8, ~2MB)    — LM Head
 **T527의 장점:** int16 DFP HW 가속 지원 (RK3588은 미지원). Transformer 후반부를 int16으로 처리하면 FP16 없이도 정밀도 유지 가능.
 
 **T527의 단점:** NB 크기 제한 (~128MB), FP16 HW 미지원, NPU 성능 1/3.
+
+---
+
+## 추가 실험 결과 (2026-03-19)
+
+### Amplitude Normalization — T527에서 효과 없음
+
+rknn-stt에서 CER 24pp 개선한 amp norm을 T527에서 시도:
+
+| 구성 | CER |
+|------|-----|
+| 기존 uint8 (amp norm 없음) | 100% |
+| amp norm 5.0 + 기존 NB | 100% (캘리브레이션 불일치) |
+| amp norm 5.0 + KL divergence 재양자화 | 100% (전 프레임 non-blank) |
+
+**차이점**: rknn-stt는 **Split INT8+FP16** 구조에서 amp norm 적용. FP16 파트가 정밀도를 보존하기 때문에 INT8 파트의 dynamic range 개선이 효과 있음. T527은 **전체 uint8**이라 후반 레이어 정밀도 손실이 근본 원인 → amp norm으로 해결 불가.
+
+### 3-Part Split uint8 — Part A(CNN)가 고정값 출력
+
+모델을 CNN + Encoder前半 + Encoder後半으로 분할, 각각 uint8 NPU:
+
+```
+Part A (CNN, 3.7MB)     → 고정값 출력 (입력 무시)
+Part B (L0-5, 35MB)     → Part A가 고정이니 무의미
+Part C (L6-11, 34MB)    → 무의미
+```
+
+Part A(CNN)의 uint8 양자화가 7-layer 1D Conv의 출력을 완전히 붕괴시킴.
+
+### int16 DFP 결론
+
+KoCitrinet int16 DFP (150MB, 216ms) 테스트에서 CER 330% → **int8보다 훨씬 나쁨**.
+
+Acuity 6.12의 양자화 조합:
+- `asymmetric_affine` + `int16` → **미지원** (uint8/int8만)
+- `dynamic_fixed_point` + `int16` → 실행되나 결과 부정확
+- **int16은 T527에서 실용적으로 사용 불가**

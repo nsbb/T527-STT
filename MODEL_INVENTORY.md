@@ -214,3 +214,37 @@ T527 NPU에서 **실제 사용 가능한 STT 모델은 2개**:
 - Zipformer — ONNX CER 16.2%이나 uint8/int16/PCQ/bf16 **전 방식 실패** (5868노드 에러 누적)
 
 **T527 NPU 양자화 경험칙**: CNN 기반(~200노드) 또는 12L 이하 transformer(~2000노드)까지 가능. 5-stack transformer(5868노드)는 불가.
+
+---
+
+## 추가 실험 (2026-03-19)
+
+### KoCitrinet int16 DFP 실험
+
+| 양자화 | NB 크기 | 추론시간 | CER | 결과 |
+|--------|---------|---------|-----|------|
+| int8 AA (기존) | 62MB | 128ms | **44.44%** | 정상 |
+| int16 DFP (신규) | 150MB | 216ms | **330.95%** | **실패** |
+
+**실패 원인**: int16 DFP(dynamic_fixed_point)는 2의 거듭제곱 스케일 + 제로포인트 없음. int8 asymmetric_affine (자유 스케일 + 제로포인트)보다 표현력이 떨어짐. Acuity 6.12에서 int16은 DFP만 가능하고 asymmetric_affine int16은 미지원.
+
+### Wav2Vec2 base-korean 추가 실험
+
+| 시도 | 결과 |
+|------|------|
+| amplitude norm 5.0 + 기존 uint8 NB | CER 100% — 캘리브레이션 불일치 (NB는 norm 없이 양자화) |
+| amp norm 5.0 + KL divergence 재양자화 (12L) | CER 100% — 전 프레임 non-blank |
+| 6L pruned 모델 uint8 | CER 100% — 6L 모델이 FP32에서도 garbage (fine-tuning 필요) |
+| 3-part split (CNN + L0-5 + L6-11) 각각 uint8 | CER 100% — Part A(CNN)가 입력 무시하고 고정값 출력 |
+
+### T527 NPU 양자화 지원 정리
+
+| quantizer | 지원 qtype | T527 NPU 동작 | 비고 |
+|---|---|---|---|
+| asymmetric_affine | uint8, int8 | **정상 동작** | 유일하게 신뢰 가능 |
+| symmetric_affine | int8 | 미테스트 | |
+| perchannel_symmetric | int8 | 동작 (Zipformer corr 0.275) | 효과 미미~악화 |
+| dynamic_fixed_point | int16, int8 | **실행되나 결과 부정확** | DFP 2^fl 스케일, zp 없음 |
+| bfloat16 | bfloat16 | export 실패 | error 64768 |
+
+> **결론**: T527 NPU에서 실용적인 양자화는 **uint8/int8 asymmetric_affine만**. int16 DFP는 실행은 되지만 int8 AA보다 오히려 나쁜 결과.
