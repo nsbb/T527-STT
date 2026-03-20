@@ -1,12 +1,70 @@
 # Wav2Vec2 Base Korean — 한국어 (T527 NPU)
 
-Kkonjeong/wav2vec2-base-korean. 한국어 STT, T527 NPU 양자화. **전부 실패.**
+Kkonjeong/wav2vec2-base-korean. 한국어 STT, T527 NPU 양자화.
 
 > **[양자화 실패 분석 보고서 (wav2vec2_korean_npu_analysis.md)](wav2vec2_korean_npu_analysis.md)** — 현상분석, 원인분석(가중치 비교, activation range), HuggingFace 모델 전수 조사, 해결 방안(QAT)
 >
 > **[해결 전략서 (korean_wav2vec2_solution_strategy.md)](korean_wav2vec2_solution_strategy.md)** — Attention 분포 근본 원인, QAT/Gated Attention/Clipped Softmax/Layer 축소/QuartzNet 전략, 실행 순서
 
-## 결과: 60종+ 시도, 21종 NPU 실측, 전부 실패
+## 최신 진전 (2026-03-20)
+
+### uint8: PAD bias + KL divergence로 부분 성공
+
+**eager opset12 ONNX 재변환 + PAD bias -8.0 + KL divergence** 조합으로 기존 46.3%에서 대폭 개선:
+
+| 지표 | 이전 최선 (SDPA) | 현재 최선 (eager+padbias8+KL) |
+|------|-----------------|------------------------------|
+| Non-blank preserved | 39.4% | **96.9%** |
+| Non-blank agreement | 23.9% | **60.2%** |
+| T527 추론시간 | 425ms | **402ms** |
+
+핵심: `attn_implementation="eager"` 강제 → SDPA 비활성화 → opset 12 호환 ONNX (957 nodes, 영어와 동일 구조).
+
+상세: ai-sdk `models/w2v_v.1.0.0_onnx/wav2vec2_ko_eager_op12/QUANTIZATION_RESULTS.md`
+
+### int16: 시뮬레이션 98.8% but 디바이스 실패
+
+| 환경 | NB agree | 상태 |
+|------|----------|------|
+| Acuity 6.21 시뮬레이션 | **98.8%** (cos 0.9998) | 거의 FP32 수준 |
+| T527 디바이스 (6.12+5.7.2 NB) | — | **HANG** (layer_norm int16 커널 미지원) |
+| T527 디바이스 (6.21+5.8.2 NB) | **1.2%** | 실행되나 garbage (시뮬-HW 불일치) |
+
+- VivanteIDE 5.7.2는 `layer_norm_axis0_I16_F32toI16_2D` 쉐이더 컴파일 실패 → HANG
+- VivanteIDE 5.8.2는 컴파일 성공 → 실행되나 NPU 하드웨어 연산 결과가 시뮬과 불일치
+- zipformer int16은 T527에서 동작 (다른 ops 사용) — int16 자체가 안 되는 건 아님
+
+### hybrid 양자화 (uint8 + int16 혼합)
+
+Pegasus `--hybrid` 플래그로 레이어별 precision 지정 가능 (NPU_量化调试_参考指南.pdf 참조):
+
+| 구성 | int16 레이어 | NB agree |
+|------|-------------|----------|
+| uint8 baseline | 0 | 58.0% |
+| CNN conv 7개만 int16 | 7 | 58.6% (+0.6%p) |
+| CNN+Softmax+PosConv+GELU | 45 | **46.3%** (-11.7%p, 악화) |
+
+레이어별 dtype_converter 삽입 오버헤드가 정밀도 이득을 상쇄.
+
+### entropy 기반 모델 분석
+
+| 구간 | 평균 entropy | 비고 |
+|------|-------------|------|
+| Feature Extractor CNN | 0.584 | OpenVINO NNCF도 동일 발견: CNN이 가장 민감 |
+| Transformer FFN (GELU) | 0.584 | |
+| Pos Conv Embed | 0.513 | |
+| Transformer Attention | 0.405 | Softmax만 0.65~0.82로 높음 |
+
+파라미터 분포: CNN 4.4%, PosConv 5%, Transformer 90%, LM Head 0.05%
+
+### 실패한 추가 시도
+
+| 접근 | 결과 | 이유 |
+|------|------|------|
+| dropout=0.1 재학습 후 PTQ | agreement 29.7% (악화) | CTC blank 과의존, PAD logit 증가 |
+| hybrid 45개 레이어 int16 | agreement 46.3% (악화) | converter layer 오버헤드 |
+
+## 결과: 70종+ 시도
 
 | 카테고리 | 시도 수 | 결과 |
 |---------|--------|------|
@@ -322,9 +380,9 @@ PyTorch FP32, 가변 길이 입력.
 
 ## 결론
 
-### 1. NPU 양자화: T527에서 사용 가능한 경로 없음
+### 1. NPU 양자화: uint8 부분 성공, int16 디바이스 실패
 
-T527 NPU는 **uint8만 HW 가속** → 이 모델은 uint8 양자화가 파괴 → **막힘**.
+uint8 PAD bias+KL로 60.2% NB agreement 달성. int16은 시뮬 98.8%이나 디바이스 미동작.
 
 | 타입 | NB 생성 | NPU 실행 | HW 가속 | 출력 품질 |
 |------|---------|---------|---------|----------|
@@ -359,3 +417,13 @@ uint8 per-tensor 양자화의 한계는 **모델 전체에 분산된 wide activa
 
 → SmoothQuant는 병목 중 하나만 해결. 나머지가 여전히 uint8을 파괴.
 → 해결 가능 경로: (1) QAT로 uint8 호환 모델 학습, (2) 다른 NPU 칩(int16/bf16 HW 지원).
+
+### 현재 최선 결과 (2026-03-20)
+
+| 방법 | NB agree | 추론시간 | 상태 |
+|------|----------|---------|------|
+| uint8 PAD bias -8 + KL (sim) | 60.2% | — | 시뮬 |
+| uint8 PAD bias -8 + KL (device) | ~58% | 402ms | **최선** |
+| int16 전체 (sim, Acuity 6.21) | 98.8% | — | 시뮬만 |
+| int16 전체 (device) | 1.2% | 1194ms | garbage |
+| KoCitrinet (참고) | — | 120ms | CER 44.44% |
