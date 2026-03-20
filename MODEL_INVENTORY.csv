@@ -1,24 +1,35 @@
-모델,언어,원본ONNX,양자화방법,NB파일경로,NB크기,실행환경,CER,추론시간,테스트셋,CSV결과파일,상태
-KoCitrinet 300f,한국어,ko_citrinet_ngc/citrinet_npu_300f_sim.onnx (40MB),int8 asymmetric_affine (120 calib / MA 0.004),ko_citrinet_ngc/v2_nb_fixlen/android_app_handoff/network_binary.nb,62MB,T527 NPU,44.44%,120ms,sample30 330샘플,t527-stt/ko_citrinet/test_results_sample30.csv,운용중
-KoCitrinet 300f,한국어,같은 ONNX,같은 NB (ONNX float),없음 (ONNX 직접 추론),-,서버 CPU,28.94%,940ms,modelhouse_3m 51샘플,ai-sdk/ko_citrinet_ngc/whisper_test/modelhouse_3m_onnx_result_CER28.94_TIME0.94.csv,참고용
-KoCitrinet 300f,한국어,같은 ONNX,같은 int8 NB,같은 NB,62MB,서버 CPU (vpm_run),33.72%,42350ms,modelhouse_3m 51샘플,ai-sdk/ko_citrinet_ngc/eval_modelhouse3m_compare/compare_onnx_vs_nb_modelhouse3m.csv,참고용
-Wav2Vec2 base-960h 5s,영어,w2v_v.1.0.0_onnx/wav2vec2_base_960h_5s/*.onnx (361MB),uint8 asymmetric_affine (reverse_channel fix),wav2vec2_base_960h_5s/wksp/*_uint8_fixed_nbg_unify/network_binary.nb,88MB,T527 NPU,~17.52%,715ms,LibriSpeech 50샘플,t527-stt/wav2vec2/base-960h-en/test_results_librispeech.csv,검증완료
-Wav2Vec2 base-korean 3s,한국어,w2v_v.1.0.0_onnx/wav2vec2_ko_eager_op12/*_3s.onnx (361MB),없음 (ONNX float),없음 (ONNX 직접 추론),-,서버 CPU,33.74%,75ms,Zeroth-Korean test 50샘플 (3초 클립),스크립트: clean_pipeline/compute_cer_fair.py,서버용만 가능
-Wav2Vec2 base-korean 3s,한국어,같은 ONNX,uint8 (1 calib / MA 0.004),clean_pipeline/export_nbg_unify/network_binary.nb,72MB,T527 NPU,~100%,415ms,Zeroth-Korean test 50샘플,clean_pipeline/compute_cer.py,실패 (거의 blank)
-Wav2Vec2 base-korean 3s,한국어,같은 ONNX,uint8 (100 calib + input fix / MA 0.004),clean_pipeline/export_ko_100iter_fix_nbg_unify/network_binary.nb,72MB,T527 NPU,~100%,415ms,Zeroth-Korean test,clean_pipeline/compute_cer.py,실패
-Wav2Vec2 base-korean 3s,한국어,같은 ONNX,uint8 (300 calib + input fix / MA 0.004) ★BEST,clean_pipeline/export_ko_300_nbg_unify/network_binary.nb,72MB,T527 NPU,100.86%,415ms,Zeroth-Korean test 50샘플,clean_pipeline/compute_cer_fair.py,실패 (양자화 파괴)
-Wav2Vec2 base-korean 3s,한국어,같은 ONNX,uint8 (1000 calib + input fix / MA 0.004),clean_pipeline/export_ko_1k_nbg_unify/network_binary.nb,72MB,T527 NPU,>100%,415ms,Zeroth-Korean test,clean_pipeline/compute_cer.py,실패 (over-convergence)
-Wav2Vec2 base-korean 3s,한국어,같은 ONNX,uint8 min_max algorithm,clean_pipeline/export_ko_normal_nbg_unify/network_binary.nb,72MB,T527 NPU,ALL PAD,-,Zeroth-Korean test,-,실패 (ALL PAD)
-Wav2Vec2 base-korean 3s,한국어,같은 ONNX,uint8 KL divergence,clean_pipeline/export_ko_kl_nbg_unify/network_binary.nb,72MB,T527 NPU,ALL PAD,-,Zeroth-Korean test,-,실패 (ALL PAD)
-Wav2Vec2 base-korean 3s,한국어,같은 ONNX,fp16 float16,wav2vec2_ko_base_3s/wksp_export_fp16_nbg_unify/network_binary.nb,182MB,T527 (CPU fallback),-,17740ms,월패드 1샘플,t527-stt/wav2vec2/base-korean/test_results_fp16_npu.csv,실패 (HW 미가속)
-Wav2Vec2 base-korean 3s,한국어,같은 ONNX,dfp16 dynamic_fixed_point i16,clean_pipeline/export_dfp16_nbg_unify/network_binary.nb,153MB,T527 NPU,-,-,-,-,실패 (status=-1 리소스 부족)
-Wav2Vec2 XLS-R-300M 3s,한국어,w2v_v.1.0.0_onnx/wav2vec2_ko_xls_r_300m_3s/*.onnx (1.2GB),uint8 asymmetric_affine,wav2vec2_ko_xls_r_300m_3s/wksp/*/network_binary.nb,249MB,T527 NPU,ALL PAD,1098ms,테스트 입력,-,실패 (300M 양자화 불가)
-Zipformer Encoder,한국어,zipformer/sherpa-onnx-*/*.onnx (280MB),uint8,zipformer/bundle_uint8/encoder/network_binary.nb,63MB,T527 NPU (미테스트),-,-,-,-,NB 생성완료
-Zipformer Encoder,한국어,zipformer/sherpa-onnx-*/*.onnx (280MB),uint8 asymmetric_affine (state 수동교정),zipformer_encoder_folded4/wksp/encoder_with_states_v7_uint8_nbg_unify/network_binary.nb,63MB,T527 NPU,100%,~50ms/chunk,KSS 4샘플 (test_wavs),ai-sdk/models/zipformer/compare_encoder_int16.py,실패 (corr 0.627)
-Zipformer Encoder,한국어,같은 ONNX,int16 DFP (state+내부 300노드 수동교정),zipformer_encoder_folded4/wksp/encoder_with_states_v6_int16_fixed_nbg_unify_nbg_unify/network_binary.nb,118MB,T527 NPU,100%,~50ms/chunk,KSS 4샘플,ai-sdk/models/zipformer/compare_encoder_int16.py,실패 (corr 0.643)
-Zipformer Encoder,한국어,같은 ONNX,PCQ int8 perchannel_symmetric,zipformer_encoder_folded4/wksp/encoder_with_states_v6_pcq_fixed_nbg_unify_nbg_unify/network_binary.nb,71MB,T527 NPU,100%,~50ms/chunk,KSS 4샘플,ai-sdk/models/zipformer/compare_encoder_pcq.py,실패 (corr 0.275)
-Zipformer Encoder,한국어,같은 ONNX,bf16 bfloat16,-,-,-,-,-,-,-,실패 (export error 64768)
-KoCitrinet 300f,한국어,ko_citrinet_ngc/citrinet_v2_fixlen.onnx (543MB),int16 DFP (dynamic_fixed_point),v2_nb_fixlen/work/wksp/citrinet_int16_fresh_nbg_unify_nbg_unify/network_binary.nb,150MB,T527 NPU,330.95%,216ms,calib 10샘플,-,실패 (DFP가 int8 AA보다 나쁨)
-Wav2Vec2 base-korean 3s,한국어,wav2vec2_ko_base_3s_nopad10_opset12_sim.onnx (361MB),uint8 + amp norm 5.0 + KL divergence,w2v_amp5_kl_nbg_unify_nbg_unify/network_binary.nb,72MB,T527 NPU,100%,~415ms,base_korean 5샘플,-,실패 (전 프레임 non-blank)
-Wav2Vec2 base-korean 3s (6L),한국어,wav2vec2_ko_base_3s_6L_nopad10_opset12_sim.onnx (199MB),uint8 KL + amp5,w2v_6L_amp5_kl_nbg_unify_nbg_unify/network_binary.nb,39MB,T527 NPU,100%,~200ms,base_korean 5샘플,-,실패 (6L FP32에서도 garbage)
-Wav2Vec2 base-korean 3s (split3),한국어,같은 12L ONNX split,각 파트 uint8 KL (3.7+35+34MB),split3/wksp/part_{a|b|c}_kl_nbg_unify_nbg_unify/,73MB(합계),T527 NPU,100%,-,base_korean 5샘플,-,실패 (Part A CNN 고정값 출력)
+#,모델,언어,ONNX크기,양자화,NB크기,실행환경,CER,추론시간,테스트셋,샘플수,CSV결과파일,상태,비고
+1,KoCitrinet 300f,한국어,543MB,int8 AA (MA 0.004),62MB,T527 NPU,8.44%,-,test_manifest (표준),100,whisper_test/test_manifest_whisper_style_onnx_result_CER8.44.csv,운용중,ONNX FP32 서버
+2,KoCitrinet 300f,한국어,543MB,int8 AA (MA 0.004),62MB,T527 NPU,12.03%,-,test_manifest (표준),100,whisper_test/test_manifest_whisper_style_nb_result_CER12.03.csv,운용중,NB int8 서버 sim
+3,KoCitrinet 300f,한국어,543MB,int8 AA (MA 0.004),62MB,T527 NPU,44.44%,120ms,sample30 (worst case),330,ko_citrinet/test_results_sample30.csv,운용중,NB int8 T527 NPU mode7
+4,KoCitrinet 300f,한국어,543MB,ONNX float,-,서버 CPU,28.94%,940ms,modelhouse_3m (실환경),51,whisper_test/modelhouse_3m_onnx_result_CER28.94.csv,참고용,
+5,KoCitrinet 300f,한국어,543MB,int8 AA,62MB,서버 sim,33.72%,-,modelhouse_3m (실환경),51,eval_modelhouse3m_compare/compare_onnx_vs_nb_modelhouse3m.csv,참고용,양자화 열화 +4.78%p
+6,KoCitrinet 300f,한국어,543MB,int16 DFP,150MB,T527 NPU,330.95%,216ms,calib (내부),10,-,실패,DFP가 int8 AA보다 나쁨
+7,KoCitrinet 500f,한국어,543MB,int8 AA,62MB,T527 NPU,-,~120ms,-,-,-,탑재완료,awaiasr_2 앱
+8,Wav2Vec2 base-960h 5s,영어,361MB,uint8 AA (fix),88MB,T527 NPU,17.52%,715ms,LibriSpeech test-clean,50,wav2vec2/base-960h-en/test_results_librispeech.csv,검증완료,
+9,Wav2Vec2 base-korean 3s,한국어,361MB,ONNX float,-,서버 CPU,33.74%,75ms,Zeroth-Korean test,50,-,서버용만,ONNX FP32
+10,Wav2Vec2 base-korean 3s,한국어,361MB,ONNX float,-,서버 CPU,9.50%,-,Zeroth-Korean test,50,-,참고용,PyTorch FP32
+11,Wav2Vec2 base-korean 3s,한국어,361MB,uint8 AA (300 calib MA),72MB,T527 NPU,100.86%,415ms,Zeroth-Korean test,50,-,실패,양자화 파괴
+12,Wav2Vec2 base-korean 3s,한국어,361MB,uint8 AA (100 calib),72MB,T527 NPU,~100%,415ms,Zeroth-Korean test,50,-,실패,
+13,Wav2Vec2 base-korean 3s,한국어,361MB,uint8 AA (1000 calib),72MB,T527 NPU,>100%,415ms,Zeroth-Korean test,50,-,실패,over-convergence
+14,Wav2Vec2 base-korean 3s,한국어,361MB,uint8 min_max,72MB,T527 NPU,ALL PAD,-,Zeroth-Korean test,50,-,실패,ALL PAD
+15,Wav2Vec2 base-korean 3s,한국어,361MB,uint8 KL divergence,72MB,T527 NPU,ALL PAD,-,Zeroth-Korean test,50,-,실패,ALL PAD
+16,Wav2Vec2 base-korean 3s,한국어,361MB,uint8 amp5 + KL,72MB,T527 NPU,100%,~415ms,base_korean,5,-,실패,전프레임 non-blank
+17,Wav2Vec2 base-korean 3s,한국어,361MB,fp16,182MB,T527 CPU fallback,-,17740ms,월패드,1,-,실패,HW 미가속 25x느림
+18,Wav2Vec2 base-korean 3s,한국어,361MB,int16 DFP,153MB,T527 NPU,-,-,-,-,-,실패,status=-1
+19,Wav2Vec2 base-korean 3s (6L),한국어,199MB,uint8 KL + amp5,39MB,T527 NPU,100%,~200ms,base_korean,5,-,실패,6L FP32에서도 garbage
+20,Wav2Vec2 base-korean 3s (split3),한국어,361MB,각파트 uint8 KL,73MB합,T527 NPU,100%,-,base_korean,5,-,실패,Part A CNN 고정값출력
+21,Wav2Vec2 base-korean 3s,한국어,361MB,ONNX float,-,서버 CPU,3.59%,-,modelhouse_2m_noheater,51,wav2vec2/base-korean/test_results_modelhouse_2m_noheater_onnx_fp32.csv,참고용,쉬운데이터 FP32
+22,Wav2Vec2 base-korean 3s,한국어,361MB,ONNX float,-,서버 CPU,14.52%,-,7F_HJY (실환경),107,wav2vec2/base-korean/test_results_7F_HJY_onnx_fp32.csv,참고용,실환경 FP32
+23,Wav2Vec2 base-korean 3s,한국어,361MB,ONNX float,-,서버 CPU,16.81%,-,7F_KSK (실환경),109,wav2vec2/base-korean/test_results_7F_KSK_onnx_fp32.csv,참고용,실환경 FP32
+24,Wav2Vec2 base-korean 3s,한국어,361MB,ONNX float,-,서버 CPU,12.57%,-,modelhouse_3m,52,wav2vec2/base-korean/test_results_modelhouse_3m_onnx_fp32.csv,참고용,FP32
+25,Wav2Vec2 XLS-R-300M 3s,한국어,1.2GB,uint8 AA,249MB,T527 NPU,ALL PAD,1098ms,-,-,-,실패,300M 양자화 불가
+26,Zipformer Encoder,한국어,280MB,uint8 AA (state수동교정),63MB,T527 NPU,100%,~50ms/chunk,KSS,4,-,실패,corr 0.627
+27,Zipformer Encoder,한국어,280MB,int16 DFP (수동교정),118MB,T527 NPU,100%,~50ms/chunk,KSS,4,-,실패,corr 0.643
+28,Zipformer Encoder,한국어,280MB,PCQ int8,71MB,T527 NPU,100%,~50ms/chunk,KSS,4,-,실패,corr 0.275
+29,Zipformer Encoder,한국어,280MB,bf16,-,-,-,-,-,-,-,실패,export error 64768
+30,Zipformer Decoder,한국어,11MB,uint8,2.8MB,T527 NPU,-,-,-,-,-,NB생성완료,Encoder 실패로 무의미
+31,Zipformer Joiner,한국어,9.8MB,uint8,1.9MB,T527 NPU,-,-,-,-,-,NB생성완료,Encoder 실패로 무의미
+32,CitriNet EN 3s,영어,40MB,uint8,7MB,T527 NPU,-,-,-,-,-,NB생성완료,미측정
+33,CitriNet EN 3s,영어,40MB,fp16,21MB,T527 NPU,-,-,-,-,-,NB생성완료,미측정
+34,DeepSpeech2,영어,-,uint8,56MB,T527 NPU,-,-,-,-,-,NB생성완료,미측정
