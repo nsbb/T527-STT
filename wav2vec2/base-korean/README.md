@@ -161,12 +161,33 @@ SmoothQuant v1/v2는 LayerNorm γ/β를 `/s`로 수정 → LN 출력 전체가 `
 2. **int16 DFP = Pegasus 시뮬에서 한국어 출력 보존** — 그러나 T527 NPU가 **status=-1** (실행 거부, HANG 아님)
 3. **CNN-only/split/combo = status=-1** — NPU가 소형/수정 모델 실행 거부
 
-### int16 DFP 검증 결과 (2026-03-16)
+### int16 DFP 검증 결과 (2026-03-16, 업데이트 2026-03-20)
 
-- NB 변환: **성공** (153MB, `wav2vec2_ko_base_3s_nopad10_opset12_sim_int16_nbg_unify/`)
-- Pegasus int16 시뮬레이션: 한국어 출력 `ㄸㅓㄴ ㅌㅔ ㅇㅣ ㅂㅇㅡㄹ` (FP32과 유사)
-- 양자화 파라미터: 입력 i16 fl=15 (×32768), 출력 i16 fl=11 (×2048)
-- **디바이스 실행: `fail to run network, status=-1`** — NPU가 int16 DFP 모델 실행을 거부
+**이전 (2026-03-16, Acuity 6.12 + VivanteIDE 5.7.2):**
+- NB 변환: **성공** (153MB)
+- Pegasus int16 시뮬레이션: 한국어 출력 정상 (FP32과 유사)
+- **디바이스: HANG** — VivanteIDE 5.7.2가 `layer_norm_axis0_I16_F32toI16_2D` VX 쉐이더 컴파일 실패
+
+**업데이트 (2026-03-20, Acuity 6.21 + VivanteIDE 5.8.2):**
+- 시뮬레이션: **98.8% NB agree** (cos 0.9998) — 거의 FP32 수준
+- 디바이스: 실행 성공 (HANG 없음, 1194ms), **그러나 garbage** (NB agree 1.2%)
+- 원인: NPU 하드웨어의 int16 Softmax/Erf 연산이 시뮬레이터와 불일치
+
+**레이어별 dump 분석 (FP32 vs int16 시뮬, 607개 레이어):**
+
+| Op | avg cos | min cos | 비고 |
+|----|---------|---------|------|
+| Conv (Feature Extractor) | **0.997** | 0.986 | 거의 완벽 |
+| InstanceNormalization | **1.000** | 1.000 | 완벽 |
+| Softmax | 0.969 | **0.914** | 핵심 병목 |
+| GELU (Erf+Mul) | 0.982 | **0.877** | 핵심 병목 |
+| Residual Add | 0.971 | **0.783** | 오차 누적 (layer 3,7,8 최악) |
+
+**결정적 발견:** wav2vec2에만 있고 zipformer에 없는 ops:
+- **Erf** (20개) — GELU activation. zipformer는 **Sigmoid** 사용 → int16 동작
+- **Sqrt** (26개) — LayerNorm
+
+→ **GELU(Erf)를 SiLU(Sigmoid) 근사로 대체**하면 int16 동작 가능성 (`GELU(x) ≈ x * sigmoid(1.702*x)`)
 - 앱에서 PAD만 출력: status=-1 → 출력 버퍼 초기화 안 됨 → 0 = PAD 토큰
 
 ## Acuity Toolkit 지원 데이터 타입 vs T527 NPU 현실
