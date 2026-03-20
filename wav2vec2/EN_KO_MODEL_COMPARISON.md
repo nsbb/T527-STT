@@ -28,21 +28,38 @@
 
 ---
 
-## 2. ONNX 그래프 차이
+## 2. ONNX 그래프 차이 — 구조가 달라 보였던 이유
+
+### 처음에 그래프가 달라 보였던 이유
 
 | 항목 | 영어 | 한국어 (원본) | 한국어 (opset12 변환) |
 |------|------|-----------|-------------------|
 | Opset | **12** | **14** | **12** |
-| Nodes | 957 | 1306 | 667 |
-| Op types | 18종 | 21종 | 16종 |
+| Nodes | 957 | **1306** (+349) | 667 |
+| Op types | 18종 | **21종** (+3) | 16종 |
 | Input | `[1, 80000]` (5초) | `[1, 48000]` (3초) | `[1, 48000]` (3초) |
 | Output | `[1, 249, 32]` | `[1, 149, 56]` | `[1, 149, 56]` |
 
-### Opset 차이의 영향
+한국어 원본 ONNX가 영어보다 349개 노드가 더 많고, Shape/Gather/Cast/Concat 같은 추가 op이 있어서 **언뜻 보면 구조가 다른 모델처럼 보인다.** 하지만 이것은 **ONNX export 도구 차이**일 뿐이다:
 
-한국어 원본은 opset 14로 export되어 349개 추가 노드(Shape, Gather, Cast, Concat 등 동적 shape 연산)가 포함된다. 이를 opset 12로 re-export + onnxsim 적용하면 667개로 줄어들어 영어(957)보다 오히려 적어진다.
+- **영어**: `torch.onnx.export(opset_version=12)` → 정적 shape 연산, 간결한 그래프
+- **한국어**: HuggingFace `optimum` 라이브러리 → **opset 14** 자동 선택 → 동적 shape 연산(Shape, Gather, Cast, Concat) 349개 추가 생성
 
-**opset 12 변환 후에도 양자화 실패** → opset/노드 수는 양자화 실패의 원인이 아님.
+**PyTorch 모델 자체는 완전히 동일한 구조**이며, ONNX export 도구/opset 버전의 차이가 그래프를 다르게 만든 것이다.
+
+### ONNX re-export 이력
+
+이 차이를 해소하기 위해 한국어 모델을 영어와 동일한 조건으로 변환:
+
+```
+한국어 원본 (opset 14, 1306 nodes)
+  → opset 12로 re-export (torch.onnx.export, opset_version=12)
+  → onnxsim 적용 (상수 fold, 불필요 노드 제거)
+  → nopad 처리 (동적 padding 제거, 고정 입력 길이)
+  → 최종: 667 nodes, 16 op types
+```
+
+**변환 후 한국어 ONNX는 영어(957 nodes)보다 오히려 적은 667 nodes**가 되었다. Op type도 거의 동일해졌다.
 
 ### Op type 비교 (opset 12 변환 후)
 
@@ -51,14 +68,18 @@
 | Add | 172 | 172 | 동일 |
 | MatMul | 98 | 98 | 동일 |
 | Mul | 79 | 79 | 동일 |
-| Transpose | 63 | 51 | 영어 +12 |
+| Transpose | 63 | 51 | 영어 +12 (onnxsim 차이) |
 | ReduceMean | 52 | 52 | 동일 |
-| Reshape | 98 | 48 | 영어 +50 |
+| Reshape | 98 | 48 | 영어 +50 (onnxsim 차이) |
 | Div | 46 | 46 | 동일 |
 | Softmax | 12 | 12 | 동일 |
 | Conv | 8 | 8 | 동일 |
 
 Reshape/Transpose 차이는 onnxsim 최적화 수준 차이일 뿐, 연산 의미는 동일.
+
+### 결론: 그래프 구조는 양자화 실패 원인이 아니다
+
+opset 12 변환 + onnxsim + nopad 적용으로 영어와 거의 동일한 ONNX 그래프를 만들었지만 **양자화는 여전히 실패**. 이는 그래프 구조가 아닌 **모델 weight와 logit 분포**가 근본 원인임을 확인시켜 준다.
 
 ---
 
