@@ -248,3 +248,49 @@ T527 NPU에서 **실제 사용 가능한 STT 모델은 2개**:
 | bfloat16 | bfloat16 | export 실패 | error 64768 |
 
 > **결론**: T527 NPU에서 실용적인 양자화는 **uint8/int8 asymmetric_affine만**. int16 DFP는 실행은 되지만 int8 AA보다 오히려 나쁜 결과.
+
+---
+
+## 추가 실험 (2026-03-23) — Wav2Vec2 한국어 uint8 양자화 최초 성공
+
+### 영어 base-960h → 한국어 fine-tune 접근
+
+기존 한국어 모델(base-korean)은 logit margin이 극도로 작아 (min 0.005) uint8 양자화 시 argmax 전부 뒤집힘.
+
+**해결**: 영어 base-960h (logit margin min=0.34, uint8 정상 동작) 모델에서 시작하여 한국어 CTC fine-tune.
+
+### 학습
+
+| 단계 | Epochs | LR | Frozen | WER |
+|------|--------|-----|--------|-----|
+| Attempt 1 | 30 | 1e-4 | CNN | 100% (CTC 수렴 실패) |
+| Attempt 2 | 50 | 3e-5 | CNN + L0-5 | 54.18% |
+| Attempt 3 | +50 | 1e-5 | CNN only | **44.04%** |
+
+- 데이터: Zeroth-Korean (22,263 train, 457 test)
+- GPU: RTX 4070 Ti Super 16GB, 총 ~3시간
+
+### T527 NPU uint8 테스트
+
+```
+NB: 72MB (uint8 KL divergence)
+ko_test_0001: blank=123/149 | "ㅂㅏㄹㅏㅁ ㅁㅔㄱㄱㅔ ㅇㅏㄹㄴㅔㄴㅇㅣ ㅁ"
+ko_test_0002: blank=128/149 | "ㄴㅏㄴㅐ ㅇㅣㄷㅇㅡㄹ ㅋㅡㄹ"
+ko_test_0003: blank=131/149 | "ㄱㅡㄹㅣ ㄱㅜ ㅇㅓㄱㅣ ㄴㅏㄴ"
+```
+
+**이전까지 한국어 Wav2Vec2 uint8은 CER 100% 전부 실패였으나, 최초로 의미있는 한국어 자모 출력!**
+
+### Logit margin 비교
+
+| 모델 | logit std | margin min | uint8 |
+|------|-----------|------------|-------|
+| 영어 base-960h (원본) | 8.39 | 0.3400 | 성공 (CER 17.52%) |
+| 한국어 base-korean (기존) | 1.95 | 0.0050 | 실패 (CER 100%) |
+| **영어→한국어 fine-tune (attempt3)** | **4.03** | **0.0196** | **부분 성공 (자모 출력!)** |
+
+### 개선 방향
+
+1. **NAS 4356시간 데이터로 재학습** — Zeroth-Korean 50시간 → 4356시간이면 WER 대폭 개선
+2. **더 긴 학습** — 100+ epochs
+3. **Label smoothing / Temperature** — logit margin 추가 확대
