@@ -123,3 +123,34 @@ NB 크기:    14MB (KoCitrinet 62MB의 1/4!)
   → onnxsim: 1647 nodes, 53MB
   → Acuity uint8 KL: 14MB NB
 ```
+
+### 한국어 Conformer (SpeechBrain KsponSpeech) — Export 실패
+
+```
+speechbrain/asr-conformer-transformerlm-ksponspeech
+  → 42.9M encoder + 5000 BPE vocab
+  → ONNX 134MB, 1438 nodes
+  → Acuity import: 성공
+  → Acuity quantize (KL uint8): 성공
+  → Acuity export NB: 실패 (error 64768)
+```
+
+**실패 원인**: 모델이 너무 큼 (42.9M params, 5000 vocab). T527 NPU가 이 크기를 처리 못 함.
+영어 Conformer small (13.2M, 1025 vocab) = 14MB NB 성공.
+한국어 Conformer medium (42.9M, 5000 vocab) = NB 생성 실패.
+
+### 비교
+
+| | 영어 small | **한국어 medium** | KoCitrinet |
+|---|---|---|---|
+| Params | 13.2M | **42.9M** | 10M |
+| Vocab | 1025 | **5000** | 2049 |
+| ONNX nodes | 1647 | **1438** | ~200 |
+| NB 생성 | **성공 (14MB)** | **실패** | 성공 (62MB) |
+| T527 NPU | 74ms | — | 120ms |
+
+### 다음 시도
+
+1. SpeechBrain conformer_small 설정으로 한국어 재학습 (13M params)
+2. vocab 크기 축소 (5000 → 1025 또는 한국어 자모 56)
+3. encoder만 export하고 CTC head를 작게 만들기
