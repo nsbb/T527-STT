@@ -35,3 +35,7 @@
 34,DeepSpeech2,영어,-,uint8,56MB,T527 NPU,-,-,-,-,-,NB생성완료,미측정
 35,Wav2Vec2 base-960h→KO (attempt4),한국어,378MB,uint8 KL,72MB,T527 NPU,~42%(FP32 WER),~415ms,Zeroth-Korean test,457,-,부분성공,영어 base에서 fine-tune한 최초 uint8 동작 모델
 36,Wav2Vec2 base-960h→KO (attempt5),한국어,378MB,uint8 KL,72MB,T527 NPU,~40.6%(FP32 WER),~415ms,Zeroth-Korean test,457,-,부분성공,margin min 0.0365 WER 개선 중
+37,Whisper tiny encoder,다국어,33MB,uint8 KL,117MB,T527 NPU,-,937ms,-,-,-,Encoder만 동작,Enc-Dec 구조라 Decoder 없이 사용 불가
+38,HuBERT base Korean,한국어,384MB,uint8 KL,76MB,T527 NPU,100%,423ms,base_korean,1,-,실패,전부 동일 토큰 (Transformer 양자화 문제)
+39,EN Conformer CTC small,영어,55MB,uint8 KL,14MB,T527 NPU,-,74ms,-,-,-,NB 성공,영어만. 한국어 fine-tune 필요
+40,KO Conformer CTC medium (SpeechBrain),한국어,134MB,uint8 KL,-,NB 생성 실패,-,-,-,-,-,실패,42.9M params 너무 큼 (error 64768)
