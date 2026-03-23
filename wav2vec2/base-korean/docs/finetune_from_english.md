@@ -308,3 +308,43 @@ adb shell "cd /data/local/tmp/test && LD_LIBRARY_PATH=/vendor/lib64 ./vpm_run_aa
 | Attempt 5 ONNX | `finetune/output/wav2vec2_ko_attempt5_sim.onnx` (378MB) |
 | Attempt 5 NB | `finetune/output/a5_nbg_nbg_unify/network_binary.nb` (72MB) |
 | Attempt 6 모델 | `finetune/output/wav2vec2-ko-attempt6/` (학습 중) |
+
+---
+
+## Attempt 6 최종 결과 (100 epochs 완료)
+
+| 항목 | 값 |
+|------|-----|
+| 시작점 | Attempt 5 checkpoint |
+| Epochs | +100 (총 280) |
+| LR | 1e-6 → 0 (cosine) |
+| 학습 시간 | 6시간 13분 |
+| **최종 WER** | **39.38%** |
+| Logit std | 4.92 |
+| Margin min | 0.0245 |
+| Margin mean | 6.74 |
+| Train loss | 0.2451 |
+
+### FP32 디코딩 결과 (ko_test_0001)
+
+```
+GT:  차 문이 종잇장처럼 얇지 않으니 문 두께 스물 센티미터를 빼면 실제 승 하차 여유 공간은 스물 센티미터라는 계산이 나옵니다
+FP32: 탈럼 야지 안으니 두문 두께 쓰물 센티미터를 빼메슬쩨 쓰짜 영의 공간에 스물 센티미터라네 기사
+```
+
+"스물 센티미터를", "공간", "센티미터라", "안으니", "두께" 등 핵심 단어 다수 일치.
+
+### WER 수렴 히스토리
+
+```
+epoch 10  → WER 40.01%
+epoch 30  → WER 39.90%
+epoch 50  → WER 39.72%
+epoch 72  → WER 39.50%
+epoch 82  → WER 39.38% (best)
+epoch 100 → WER 39.38% (수렴)
+```
+
+### Attempt 7 자동 시작됨
+
+attempt6 완료 후 auto_continue.sh에 의해 attempt7 (LR=5e-7) 자동 시작.
