@@ -34,3 +34,4 @@
 33,CitriNet EN 3s,영어,40MB,fp16,21MB,T527 NPU,-,-,-,-,-,NB생성완료,미측정
 34,DeepSpeech2,영어,-,uint8,56MB,T527 NPU,-,-,-,-,-,NB생성완료,미측정
 35,Wav2Vec2 base-960h→KO (attempt4),한국어,378MB,uint8 KL,72MB,T527 NPU,~42%(FP32 WER),~415ms,Zeroth-Korean test,457,-,부분성공,영어 base에서 fine-tune한 최초 uint8 동작 모델
+36,Wav2Vec2 base-960h→KO (attempt5),한국어,378MB,uint8 KL,72MB,T527 NPU,~40.6%(FP32 WER),~415ms,Zeroth-Korean test,457,-,부분성공,margin min 0.0365 WER 개선 중
