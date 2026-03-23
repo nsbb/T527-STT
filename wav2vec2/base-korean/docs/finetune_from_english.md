@@ -348,3 +348,53 @@ epoch 100 → WER 39.38% (수렴)
 ### Attempt 7 자동 시작됨
 
 attempt6 완료 후 auto_continue.sh에 의해 attempt7 (LR=5e-7) 자동 시작.
+
+---
+
+## QAT (Quantization-Aware Training) 결과
+
+### 설정
+
+- attempt7 (WER 39.23%) 모델에서 시작
+- FakeQuantize 50개 삽입 (encoder attention out_proj + lm_head)
+- uint8 asymmetric affine 시뮬레이션
+- 30 epochs, LR=1e-5, FP32 (fp16 비활성)
+
+### WER 추이
+
+```
+epoch  1  WER 0.4412  (FakeQuantize 추가 직후 하락)
+epoch 10  WER 0.4267
+epoch 20  WER 0.4203
+epoch 22  WER 0.4173  (best)
+epoch 30  WER 0.4245  (overfitting)
+```
+
+### Logit Margin 비교
+
+| 모델 | Margin mean | Margin min | WER |
+|------|-------------|------------|-----|
+| attempt7 (PTQ) | 6.74 | 0.0245 | 39.23% |
+| **QAT** | **8.96** (+33%) | **0.0006** (악화) | 41.73% |
+| 영어 base-960h | 10.85 | 0.34 | 17.52% |
+
+### T527 NPU uint8 결과
+
+| 샘플 | attempt6 NPU | QAT NPU |
+|------|-------------|---------|
+| ko_test_0003 | 그리구어기 나 | 그리구 어기 난 |
+| ko_test_0006 | 약구워된 여단 | 야궈든 여당 |
+| ko_test_0009 | 이 벋에 발껼께 | 이벋에 발껼 깨아 |
+
+**결과 거의 동일.** QAT가 margin mean을 키웠지만, margin min은 오히려 악화. uint8 실제 결과에서 의미있는 개선 없음.
+
+### 분석
+
+QAT의 FakeQuantize가 대부분의 프레임에서 margin을 키웠으나 (mean 33% 개선), 소수의 경계 프레임에서 오히려 불안정해짐 (min 악화). T527 uint8 양자화는 min margin에 의해 결정되므로 개선 효과 없음.
+
+### 더 나은 QAT 접근 필요
+
+1. **더 많은 FakeQuantize 위치** — 현재 attention out_proj + lm_head만. 모든 Linear/Conv에 삽입
+2. **NNCF 자동 QAT** — 수동 삽입 대신 NNCF가 최적 위치에 자동 삽입
+3. **더 많은 데이터** — 50시간으로는 QAT 효과 제한적
+4. **Margin min 최적화 loss** — CTC loss + margin penalty 추가
