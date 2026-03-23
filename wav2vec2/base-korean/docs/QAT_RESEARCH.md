@@ -331,7 +331,35 @@ wav2vec2 대신 Whisper tiny/small 사용.
 
 ---
 
-## 7. 핵심 교훈 및 Premise
+## 7. 실험 결과 (2026-03-24)
+
+### 7.1 QAT 기본 (FakeQuantize only, 30 epoch)
+
+시작: attempt5 (WER 40.6%, margin_min=0.037)
+완료: WER **38.86%**, margin_min=**0.099** (20배 개선)
+
+| 지표 | attempt5 (baseline) | QAT |
+|------|-------------------|-----|
+| WER | 40.6% | **38.86%** |
+| margin_min | 0.037 | **0.099** |
+| uint8 step | ~0.15 | 0.151 |
+| ratio (margin/step) | 0.25x | **0.66x** |
+| uint8 생존 | NO | NO (근접) |
+
+margin이 0.037 → 0.099로 3배 증가했지만 아직 step(0.151)보다 작다.
+
+### 7.2 QAT + Margin Loss (진행 중, 20 epoch)
+
+시작: QAT 결과 (WER 38.86%)
+변경: non-blank 프레임의 margin을 0.2 이상으로 강제하는 margin loss 추가
+진행 중 — 결과 대기.
+
+**초기 문제**: blank 프레임 포함 시 min_margin=0.0000 (blank은 원래 margin 0)
+**수정**: non-blank 프레임만 margin loss 적용
+
+---
+
+## 8. 핵심 교훈 및 Premise
 
 1. **PTQ로 안 되면 QAT** — PTQ 21종 실패 후 QAT가 유일한 대안
 2. **Margin > Step이 uint8 양자화 성공의 필요조건** — logit margin 분석으로 사전 판단 가능
