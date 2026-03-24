@@ -389,7 +389,69 @@ vocab 1900 + split이면:
 
 ---
 
-## 9. 관련 선행 사례
+## 9. FAQ
+
+### 9.1 lm_head만 빼면 되나? L8-11도 빼야 하지 않나?
+
+**lm_head만 빼면 된다.**
+
+```
+문제의 본질:
+  L8-11 encoder → uint8 오차 누적 → hidden states에 노이즈
+  lm_head(uint8) → 노이즈 낀 hidden states를 uint8 logits로 또 깎음 → margin 사망
+
+Split으로 lm_head만 fp32로 빼면:
+  L8-11 encoder → uint8 오차 누적 → hidden states에 노이즈 (여전히 있음)
+  lm_head(fp32) → 노이즈 있어도 float32 logits → margin 보존 → argmax 정확
+```
+
+L8-11을 CPU로 빼면 정확도는 더 좋겠지만 속도가 치명적:
+
+| CPU에서 실행하는 범위 | 연산량 | ARM CPU 시간 | 총 추론 시간 |
+|---|---|---|---|
+| **lm_head만** | 6.4M ops | **~5ms** | **~405ms** |
+| L11 + lm_head | ~10B ops | ~800ms | ~1200ms |
+| L8-11 + lm_head | ~40B ops | ~3000ms | ~3400ms |
+
+lm_head만 빼도 margin 문제는 해결되고, 속도 페널티가 5ms뿐이라 최적.
+
+### 9.2 lm_head가 "activation"인가?
+
+아니다. 용어 정리:
+
+```
+weight:     모델 파라미터 (학습된 값, 고정). lm_head.weight shape=[56,768]
+activation: 입력 데이터가 레이어를 통과하면서 나오는 중간 값 (매번 다름)
+lm_head:    마지막 Linear 레이어. weight를 가지고 있고, activation(hidden states)을
+            받아서 logits를 출력.
+
+T527의 W8A8 문제:
+  lm_head의 weight(uint8) × activation(uint8) → logits(uint8) → margin 사망
+
+Split의 해결:
+  lm_head의 weight(fp32) × activation(fp32) → logits(fp32) → margin 보존
+```
+
+### 9.3 검증 순서: 왜 영어 모델부터?
+
+```
+1번: 영어 vocab 32 (이미 전체 uint8에서 CER 17.52%)
+  → Split하면 CER ≈ 9.74% (ONNX float)에 근접 예상
+  → 비교 기준이 이미 있어서 Split 효과를 깨끗하게 검증 가능
+
+2번: 한국어 vocab 56
+  → 영어에서 검증되면 바로 적용
+
+3번: 한국어 vocab 1900
+  → 56에서 되면 1900도 시도 (float32 logits이면 vocab 제약 완화)
+```
+
+영어로 먼저 하면 "Split이 정말 margin 문제를 해결하는지" 깨끗하게 증명 가능.
+한국어로 바로 가면 encoder 양자화 오차 문제와 섞여서 원인 구분이 어려움.
+
+---
+
+## 10. 관련 선행 사례
 
 - **OpenVINO NNCF**: 94개 연산 중 3개를 FP32로 되돌려 WER 복구 — 같은 원리
 - **LLM W4A16 (GPTQ/AWQ)**: weight만 양자화, activation FP16 유지 — 효과 동일
