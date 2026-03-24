@@ -309,7 +309,69 @@ python3 eval_split_model.py --output output_0.dat --gt ground_truth.txt
 
 ---
 
-## 5. 예상 결과 (한국어)
+### 4.1 한국어 모델 Split 실험 (핵심 테스트)
+
+**모델:** wav2vec2-base-korean (Kkonjeong, vocab 56, 자모)
+**방법:** 영어와 동일 — encoder_only.onnx → uint8 NB → T527 → lm_head fp32 CPU
+
+**NB 변환:**
+- 50 calibration tensors, KL divergence + fqb16, reverse_channel=false
+- encoder NB: 75MB, 입력 scale=0.00072033 zp=121, 출력 scale=0.02796588 zp=140
+- 디바이스 추론: ~415ms
+
+**CER 결과 (20 samples, Zeroth-Korean):**
+
+| 방식 | CER | 비고 |
+|------|-----|------|
+| ONNX FP32 (서버) | 33.74% | 최상 |
+| **Full uint8 (기존)** | **100.86%** | 완전 실패 |
+| **Split (encoder NPU uint8 + lm_head CPU fp32)** | **99.70%** | **개선 없음** |
+
+**출력 예시:**
+
+| # | Split 출력 | GT | CER |
+|---|---|---|---|
+| 0 | ㅗㄴ토기느  ㅇ 잉 ㄷ앟ㄴㅇ앙다 | 삼 분기에만 매출 일 조 이 | 120% |
+| 3 | ㅡ리고  나 ㅇ | 당초 지난 십 칠 일 열린 회의에서 결 | 100% |
+| 19 | 지금으 대통령이 ㅏ | 머니투데이 편집자주 소위 강남 삼 | 100% |
+
+### 4.2 결론: Split model의 한계
+
+**lm_head를 fp32로 빼도 한국어에서는 효과 없다.**
+
+원인: 문제는 lm_head의 uint8 양자화가 아니라 **encoder 자체의 uint8 양자화 오차**.
+
+```
+영어 encoder uint8:  cos(NPU, FP32) ≈ 0.97  → hidden states 정보 충분 → lm_head fp32 효과 있음
+한국어 encoder uint8: cos(NPU, FP32) ≈ 0.66  → hidden states 이미 망가짐 → lm_head fp32해도 무의미
+```
+
+**Split model이 효과적인 조건:**
+1. encoder의 uint8 양자화 품질이 충분히 좋아야 함 (cos > 0.9)
+2. margin 문제가 lm_head 단에서만 발생하는 경우
+
+한국어 base-korean은 **encoder L8-11에서 양자화 오차가 누적**되어 hidden states 자체가 쓰레기 → lm_head를 아무리 정밀하게 해도 복구 불가.
+
+**남은 경로:**
+- QAT + margin loss → encoder 양자화 내성 강화 (진행 중)
+- 영어→한국어 fine-tune → encoder activation 분포가 양자화에 유리 (attempt5 WER 40.6%)
+- aihub 4356시간 대규모 학습 → 모델 자체 성능 향상
+
+---
+
+## 5. 전체 실험 결과 종합
+
+| 방식 | 영어 CER | 한국어 CER | 효과 |
+|------|---------|-----------|------|
+| ONNX FP32 | 9.74% | 33.74% | 서버 최상 |
+| Full uint8 | **17.52%** | **100.86%** | 영어 OK, 한국어 실패 |
+| Split (enc uint8 + lm fp32) | **20.68%** | **99.70%** | 영어 약간 나쁨, 한국어 효과 없음 |
+| QAT + margin loss | — | 진행 중 | margin 0.099 (개선 중) |
+| fine-tune (attempt5) | — | WER 40.6% | 유일한 성공 |
+
+---
+
+## 6. 예상 결과 (향후)
 
 ### 4.1 정확도
 
