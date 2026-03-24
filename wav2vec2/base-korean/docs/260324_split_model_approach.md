@@ -417,6 +417,19 @@ python3 eval_split_model.py --output output_0.dat --gt ground_truth.txt
 | Split lm_head (L0-11 NPU + lm fp32) | 20.68% | 99.70% | 효과 없음 |
 | Split L7 (L0-7 NPU + L8-11+lm fp32) | — | 99.26% | 효과 없음 |
 | **CNN+lm fp32 (OpenVINO 방식)** | — | **100.00% (전부 blank)** | **오히려 악화** |
+
+### 속도 실측 (T527 ARM CPU)
+
+T527 디바이스에서 Transformer 4레이어(L8-11) + lm_head를 naive C matmul로 실측:
+
+| 구간 | T527 시간 | 비고 |
+|------|----------|------|
+| NPU (전체 모델, uint8) | 415ms | 기존 |
+| NPU (Transformer only) | 285ms | Split 시 |
+| **CPU naive matmul (L8-11 + lm_head)** | **391,854ms (6.5분)** | naive 3중 루프, 최적화 없음 |
+| CPU ONNX Runtime (예상) | 4~40초 | NEON SIMD 최적화 시 |
+
+→ L8-11을 CPU에서 돌리면 naive 기준 **6.5분**, 최적화해도 **수 초** — 실시간 사용 불가.
 | QAT + margin loss | — | 진행 중 | margin 0.099 (개선 중) |
 | fine-tune (attempt5) | — | WER 40.6% | 유일한 성공 |
 
