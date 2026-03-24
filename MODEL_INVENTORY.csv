@@ -41,3 +41,4 @@
 40,KO Conformer CTC medium (SpeechBrain),한국어,134MB,uint8 KL,-,NB 생성 실패,-,-,-,-,-,실패,42.9M params 너무 큼 (error 64768)
 41,Wav2Vec2 KO QAT (attempt7+QAT),한국어,378MB,uint8 KL,72MB,T527 NPU,WER 41.73% FP32,~400ms,Zeroth-Korean,457,-,부분동작,QAT margin mean 33% 개선 but min 악화
 42,Wav2Vec2 KO NNCF-QAT (73 FQ all Linear),한국어,378MB,uint8 KL,72MB,T527 NPU,WER 42.48% FP32,~400ms,Zeroth-Korean,457,-,부분동작,margin mean 9.32 (38% 개선) min 0.0181
+43,Wav2Vec2 base-korean (NAS 80k),한국어,384MB,uint8 KL,77MB,T527 NPU,WER 20.14% FP32,424ms,다양한 테스트셋,다수,-,부분동작,margin 12.31/0.05 — 음절 출력되나 대부분 blank
