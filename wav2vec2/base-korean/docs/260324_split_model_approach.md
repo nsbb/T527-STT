@@ -359,15 +359,45 @@ python3 eval_split_model.py --output output_0.dat --gt ground_truth.txt
 
 ---
 
+### 4.3 L0-7(NPU) + L8-11+lm_head(CPU fp32) 실험
+
+**가설:** L8-11이 가장 양자화에 취약하니까, L0-7만 NPU uint8로 돌리고 L8-11+lm_head는 CPU fp32로 실행하면?
+
+**구현:**
+- ONNX를 Part A(CNN+L0-7, 264MB, 675노드)와 Part B(L8-11+lm_head, 114MB, 282노드)로 분리
+- Part A: Acuity uint8 NB (52MB) → T527 NPU, ~320ms
+- Part B: ONNX Runtime fp32 → 서버 Python에서 실행 (디바이스에서는 ONNX Runtime CPU)
+- 분리 검증: Part A→Part B vs 원본 = max diff 0.0 (완벽 일치)
+
+**CER 결과 (20 samples, Zeroth-Korean):**
+
+| 방식 | CER | NPU 시간 |
+|------|-----|---------|
+| Full uint8 | 100.86% | 415ms |
+| Split lm_head만 (L0-11 NPU + lm fp32) | 99.70% | 415ms |
+| **Split L7 (L0-7 NPU + L8-11+lm fp32)** | **99.26%** | **320ms** |
+| ONNX FP32 | 33.74% | 서버 |
+
+**결론: L8-11을 fp32로 빼도 CER 개선 없음 (99.26% ≈ 100%).**
+
+출력은 이전보다 한국어 단어가 약간 더 나옴 ("그리고 이 나므", "지금은 대통렬") — L8-11 fp32의 효과가 미미하게 있지만 실용적 개선은 아님.
+
+**근본 원인:** L0-7의 uint8 양자화조차 한국어 모델에서는 정보를 충분히 보존하지 못함. 한국어 모델의 activation 분포가 영어보다 uint8에 취약 — 이건 모델 weight의 문제이지 분리 지점의 문제가 아님.
+
+---
+
 ## 5. 전체 실험 결과 종합
 
 | 방식 | 영어 CER | 한국어 CER | 효과 |
 |------|---------|-----------|------|
 | ONNX FP32 | 9.74% | 33.74% | 서버 최상 |
 | Full uint8 | **17.52%** | **100.86%** | 영어 OK, 한국어 실패 |
-| Split (enc uint8 + lm fp32) | **20.68%** | **99.70%** | 영어 약간 나쁨, 한국어 효과 없음 |
+| Split lm_head (L0-11 NPU + lm fp32) | 20.68% | 99.70% | 효과 없음 |
+| **Split L7 (L0-7 NPU + L8-11+lm fp32)** | **미측정** | **99.26%** | **효과 없음** |
 | QAT + margin loss | — | 진행 중 | margin 0.099 (개선 중) |
 | fine-tune (attempt5) | — | WER 40.6% | 유일한 성공 |
+
+**Split model 최종 결론:** 한국어 base-korean 모델은 어디서 잘라도 uint8 양자화가 안 됨. L0-7조차 한국어 activation 분포에서는 uint8 정보 손실이 치명적. **모델 weight 자체를 바꿔야 함** (fine-tune, QAT).
 
 ---
 
