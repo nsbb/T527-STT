@@ -386,6 +386,28 @@ python3 eval_split_model.py --output output_0.dat --gt ground_truth.txt
 
 ---
 
+### 4.4 CNN(fp32) + Transformer(NPU uint8) + lm_head(fp32) — OpenVINO 방식
+
+**가설:** OpenVINO NNCF도 conv_layers 1,2,3을 FP32로 복원하여 WER 회복. CNN이 양자화에 가장 민감하니 CNN을 fp32로 빼면?
+
+**구현:**
+- Part A: CNN+feature_projection+pos_conv+layer_norm (115 nodes, 37MB) → CPU fp32
+- Part B: Transformer L0-11 (840 nodes, 340MB) → Acuity uint8 NB (72MB)
+- Part C: lm_head (weight 768×56) → CPU fp32 matmul
+- calibration: CNN fp32 출력 50개를 npy로 저장 → Transformer 양자화에 사용
+
+**CER 결과 (20 samples):**
+
+| 방식 | CER | NPU 시간 |
+|------|-----|---------|
+| **CNN(fp32) + TF(NPU uint8) + lm(fp32)** | **100.00% (전부 blank)** | **285ms** |
+
+**오히려 악화.** 이전 split에서는 자모 파편이라도 나왔는데 이번엔 아예 blank.
+
+원인: CNN fp32 출력을 uint8로 양자화해서 Transformer NPU에 넣을 때, **CNN의 정밀한 feature가 uint8 경계에서 손실**. 전체 uint8로 할 때는 Acuity가 CNN→Transformer를 통째로 최적화하지만, 분리하면 그 최적화가 깨짐.
+
+---
+
 ## 5. 전체 실험 결과 종합
 
 | 방식 | 영어 CER | 한국어 CER | 효과 |
@@ -393,7 +415,8 @@ python3 eval_split_model.py --output output_0.dat --gt ground_truth.txt
 | ONNX FP32 | 9.74% | 33.74% | 서버 최상 |
 | Full uint8 | **17.52%** | **100.86%** | 영어 OK, 한국어 실패 |
 | Split lm_head (L0-11 NPU + lm fp32) | 20.68% | 99.70% | 효과 없음 |
-| **Split L7 (L0-7 NPU + L8-11+lm fp32)** | **미측정** | **99.26%** | **효과 없음** |
+| Split L7 (L0-7 NPU + L8-11+lm fp32) | — | 99.26% | 효과 없음 |
+| **CNN+lm fp32 (OpenVINO 방식)** | — | **100.00% (전부 blank)** | **오히려 악화** |
 | QAT + margin loss | — | 진행 중 | margin 0.099 (개선 중) |
 | fine-tune (attempt5) | — | WER 40.6% | 유일한 성공 |
 
