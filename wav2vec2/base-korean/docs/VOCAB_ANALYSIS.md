@@ -390,6 +390,89 @@ lm_head만 다르므로 학습 비용 차이 크지 않음.
 
 ---
 
+## 10. LLM 4-bit 양자화와의 비교: 왜 LLM은 되고 STT는 안 되는가
+
+### 10.1 LLM vs STT 양자화 방식의 근본 차이
+
+| | LLM (GPT, Llama 등) | STT on T527 NPU |
+|---|---|---|
+| 양자화 방식 | **W4A16** (weight만 4-bit) | **W8A8** (weight+activation 둘 다 uint8) |
+| activation precision | **FP16 유지** | **uint8 강제** |
+| softmax 입력 | FP16 → argmax 정확 | uint8 → argmax 부정확 |
+| vocab 크기 | 128K+ (문제 없음) | 56도 간신히 |
+| 양자화 도구 | GPTQ, AWQ, SmoothQuant | Acuity Pegasus |
+
+**핵심 차이: activation 양자화 여부**
+
+```
+LLM 4-bit (GPTQ/AWQ):
+  weight(4-bit) × activation(FP16) → 결과(FP16) → softmax(FP16) → argmax ✓
+  → activation이 FP16이므로 logit 정밀도 유지 → margin 문제 없음
+  → vocab 128K에서도 정확한 argmax 가능
+
+T527 NPU uint8:
+  weight(uint8) × activation(uint8) → 결과(uint8) → softmax(uint8) → argmax ✗
+  → activation도 uint8이므로 logit이 256단계로 깎임
+  → margin < step이면 argmax 뒤집힘
+  → vocab 56에서도 간신히, 1900은 불가능
+```
+
+LLM이 vocab 128K + 4-bit에서도 잘 되는 이유: **activation을 양자화하지 않기 때문**.
+T527 NPU에서 STT가 안 되는 이유: **activation도 uint8로 강제되기 때문**.
+
+### 10.2 LLM도 W8A8하면 어려워진다
+
+LLM도 activation까지 양자화(W8A8)하면 정확도가 떨어진다:
+
+```
+LLM W4A16: 거의 lossless (activation은 FP16)
+LLM W8A8:  약간 열화 (SmoothQuant 등 필요)
+LLM W4A8:  상당한 열화
+LLM W4A4:  매우 어려움 (연구 단계)
+```
+
+T527 NPU는 **강제 W8A8**. LLM에서도 어려운 영역이다.
+
+### 10.3 Acuity/Pegasus는 W8A16을 지원하지 않는다
+
+Acuity 6.12/6.21의 `pegasus quantize` 소스 코드(acuitylib)에서 확인한 전체 지원 조합:
+
+```python
+# acuitylib/quantization/types.py → QuantizerType.pegasus_quantizer
+{
+    'asymmetric_affine':           ['uint8', 'int8', 'uint4', 'int4'],
+    'dynamic_fixed_point':         ['int8', 'int16'],
+    'symmetric_affine':            ['int8', 'int4'],
+    'perchannel_symmetric_affine': ['int8', 'int4'],
+    'bfloat16':                    ['bfloat16'],
+    'float16':                     ['float16'],
+}
+```
+
+**모든 옵션이 weight와 activation에 동일한 qtype 적용:**
+- `--qtype uint8` → weight uint8, activation uint8 (W8A8)
+- `--qtype int4` → weight int4, activation int4 (W4A4)
+
+**LLM처럼 weight만 양자화하고 activation은 FP16으로 유지하는 옵션이 존재하지 않는다.**
+이것은 Vivante NPU 하드웨어 설계상의 제약 — NPU가 동일 precision의 weight×activation GEMM만 지원.
+
+### 10.4 T527 NPU에서 실제 동작하는 조합 (실측)
+
+| quantizer | qtype | NB 생성 | T527 동작 | 정확도 |
+|-----------|-------|---------|----------|--------|
+| **asymmetric_affine** | **uint8** | ✓ | **✓ 안정** | **유일하게 실용적** |
+| asymmetric_affine | int8 | ✓ | ✓ | uint8과 유사 |
+| dynamic_fixed_point | int16 | ✓ | ✓ (크기 <120MB) | uint8보다 나쁨 (DFP 한계) |
+| dynamic_fixed_point | int8 | ✓ | ✓ | DFP라 AA보다 나쁨 |
+| perchannel_symmetric | int8 | ✓ (6.21만) | ✓ | 효과 미미~악화 |
+| bfloat16 | bfloat16 | ✗ (export 실패) | — | — |
+| float16 | float16 | ✓ | CPU fallback (17초) | HW 미가속 |
+| asymmetric_affine | int4/uint4 | 미시도 | 미확인 | — |
+
+**결론: T527 NPU에서 실질적 선택은 uint8 asymmetric_affine 하나뿐.**
+
+---
+
 ## 부록 A: 용어 정리
 
 | 용어 | 설명 |
