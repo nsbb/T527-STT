@@ -1099,6 +1099,56 @@ range: 51.8 → uint8 step: 0.203
 
 ---
 
+# 39. 차세대 모델 후보: Squeezeformer, E-Branchformer
+
+## 39.1 Squeezeformer (NeurIPS 2022)
+
+> [Squeezeformer: An Efficient Transformer for ASR](https://arxiv.org/pdf/2206.00888)
+
+Conformer의 비효율적 부분을 제거한 효율화 버전:
+- **Temporal U-Net 구조**: 입력 길이를 단계적으로 줄여서 연산 효율화
+- **Macro/Micro Redesign**: FFN → Attention → Conv 순서 재배치
+- 같은 FLOPs에서 Conformer보다 정확도 높음
+
+**T527 적용 가능성:** ⭐⭐⭐⭐
+- CNN + Attention 하이브리드 유지 → uint8 양자화 가능할 것
+- U-Net 구조로 중간 레이어의 sequence 길이 축소 → 양자화 오차 누적 감소
+- NeMo에서 지원 → 기존 파이프라인 재사용 가능
+
+## 39.2 E-Branchformer (SLT 2022, ICLR 2024)
+
+> [E-Branchformer: Enhanced Merging for Speech Recognition](https://arxiv.org/abs/2210.00077)
+
+Conformer의 병렬 브랜치 버전:
+- **두 갈래 병합**: Self-Attention branch + **Conv branch를 병렬 실행 후 합침**
+- **Depthwise conv 강화**: merging에 추가 depthwise conv 삽입
+- LibriSpeech WER: E-Branchformer 1.81% vs Conformer 1.9% (test-clean)
+
+**T527 적용 가능성:** ⭐⭐⭐⭐⭐
+- **Conv 비중이 Conformer보다 더 높음** → uint8 양자화에 더 유리할 가능성
+- 15개 ASR 벤치마크에서 Conformer와 동등 이상
+- 학습 안정성 Conformer보다 우수
+
+## 39.3 FastConformer (NVIDIA, NeMo 기본)
+
+NeMo의 기본 Conformer 변형:
+- 8x subsampling (Conformer 4x 대비 2배 축소)
+- 더 빠른 추론, 약간 낮은 정확도
+- **T527 적용 시 sequence 길이가 절반** → 양자화 오차 누적 더 감소
+
+## 39.4 후보 비교
+
+| 모델 | CNN 비중 | uint8 예상 | FP32 정확도 | NeMo 지원 |
+|------|---------|-----------|-----------|----------|
+| Conformer | 높음 | **CER 10.02% (검증)** | 좋음 | ✓ |
+| Squeezeformer | 높음 | 좋을 것 (미검증) | Conformer 이상 | ✓ |
+| **E-Branchformer** | **매우 높음** | **가장 좋을 것 (미검증)** | **Conformer 이상** | △ (ESPnet) |
+| FastConformer | 높음 | 좋을 것 (미검증) | Conformer 이하 | ✓ |
+
+**권장 시도 순서:** Conformer (검증됨) → E-Branchformer (Conv 비중 최고) → Squeezeformer (효율)
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
