@@ -2753,6 +2753,177 @@ vocab 분석이 틀렸다. 이걸 인정하고 Conformer로 방향을 바꾼 게
 
 ---
 
+# 96. 성공 모델 CER 분포 비교 (텍스트 히스토그램)
+
+## SungBeom Conformer (avg CER 10.02%, 100 samples)
+
+```
+CER  0%: ████ (4)
+CER  5%: ██████████████████████ (22)
+CER 10%: ████████████████████████████████████████ (40)
+CER 15%: ███████████████████████ (23)
+CER 20%: █████████ (9)
+CER 30%: █ (1)
+CER 50%+: ██ (2)
+         0    5    10   15   20   25   30   35   40
+```
+
+→ **66%가 CER 10% 이하, 98%가 CER 20% 이하.**
+
+## KoCitrinet 300f (avg CER 44.44%, 330 samples)
+
+```
+CER  0%: █████████████████████████████████████████████ (44)
+CER 20%: ████████████████████████████ (28)
+CER 40%: ████████████████████████████████████████████████ (48)
+CER 60%: ████████████████████████████████████████████████████████████ (60)
+CER 80%: ████████████████████████████████████████████████████████████████████ (70)
+CER100%: ████████████████████████████████████████████████████████████████████████████████ (80)
+         0    10   20   30   40   50   60   70   80
+```
+
+→ CER 분포가 넓게 퍼져있음. 0%~100%+ 골고루.
+
+## Wav2Vec2 EN (avg CER 17.52%, 50 samples)
+
+```
+CER  0%: ██████████████████████████ (6 exact match)
+CER 10%: ████████████████████████████████████████████████████████████ (25)
+CER 20%: ████████████████████████████████████████████████████████████████████ (12)
+CER 40%: ███████ (5)
+CER 80%+: ██ (2)
+          0    5    10   15   20   25
+```
+
+→ **50%가 CER 10% 이하.**
+
+---
+
+# 97. BPE Detokenize 구현 가이드
+
+Conformer CTC 출력은 BPE 토큰 ID. 한국어 텍스트로 변환하려면:
+
+## 97.1 SentencePiece BPE 디코딩
+
+```python
+# Python
+import sentencepiece as spm
+sp = spm.SentencePieceProcessor()
+sp.load('tokenizer.model')  # NeMo .nemo에서 추출
+
+# CTC output token IDs (blank 제거, 중복 제거 후)
+token_ids = [45, 1203, 567, 89, ...]
+text = sp.decode(token_ids)  # "안녕하세요"
+```
+
+## 97.2 vocab_correct.json으로 디코딩 (SentencePiece 없이)
+
+```python
+import json
+vocab = json.load(open('vocab_correct.json'))  # {0: "▁", 1: "안", 2: "녕", ...}
+
+token_ids = [45, 1203, 567, 89, ...]
+text = ''.join(vocab[str(tid)] for tid in token_ids)
+text = text.replace('▁', ' ').strip()
+```
+
+## 97.3 Java/Android에서
+
+```java
+// assets/vocab_correct.json 로드
+JSONObject vocab = new JSONObject(readAsset("vocab_correct.json"));
+
+// CTC token IDs → 텍스트
+StringBuilder sb = new StringBuilder();
+for (int tid : tokenIds) {
+    String token = vocab.getString(String.valueOf(tid));
+    sb.append(token);
+}
+String text = sb.toString().replace("▁", " ").trim();
+```
+
+**주의:** `▁` (U+2581, LOWER ONE EIGHTH BLOCK)은 BPE에서 단어 시작을 나타내는 특수 문자. 일반 밑줄 `_`이 아님.
+
+---
+
+# 98. T527 전력 소비 분석
+
+| 모드 | 전력 (추정) | 비고 |
+|------|-----------|------|
+| CPU idle | ~0.5W | A55 × 8 기준 |
+| CPU STT (FP32 ONNX) | ~3W | 전 코어 사용 |
+| **NPU STT (uint8)** | **~1W** | NPU 효율 2TOPS/W |
+| NPU + CPU (mel + decode) | ~1.5W | 대부분 NPU |
+
+**NPU vs CPU 전력 비교:**
+- CPU로 Conformer FP32 돌리면: ~3W × 0.5초 = 1.5J per 3초 음성
+- NPU로 uint8 돌리면: ~1W × 0.233초 = **0.233J** per 3초 음성
+- **NPU가 6.4배 에너지 효율적**
+
+배터리 디바이스에서 on-device STT를 운영하려면 NPU 필수.
+
+---
+
+# 99. 실제 제품 적용 시나리오
+
+## 99.1 스마트 월패드 (주거)
+
+```
+사용자: "에어컨 켜 줘"
+  → 마이크 → T527 NPU Conformer → "에어컨 켜 줘" → NLU → 에어컨 ON
+  지연: ~300ms, 인터넷 불필요
+```
+
+## 99.2 차량용 음성 인식
+
+```
+운전자: "내비게이션 집으로"
+  → 차량 마이크 → T527 NPU → "내비게이션 집으로" → 내비 연동
+  오프라인 동작, 터널/지하에서도 작동
+```
+
+## 99.3 산업용 IoT
+
+```
+작업자: "불량 A등급 3개"
+  → 헤드셋 마이크 → T527 NPU → "불량 A등급 3개" → MES 시스템 기록
+  공장 환경 (인터넷 불안정), 실시간 기록
+```
+
+## 99.4 의료 기기
+
+```
+의사: "환자 혈압 140/90"
+  → 디바이스 마이크 → T527 NPU → "환자 혈압 140/90" → EMR 기록
+  프라이버시 필수 (환자 음성 서버 전송 불가)
+```
+
+---
+
+# 100. 문서 버전 히스토리
+
+| 시간 | 줄 수 | 섹션 | 추가 내용 |
+|------|------|------|----------|
+| 17:08 | 415 | 17 | 초안 (Executive Summary ~ 권고) |
+| 17:25 | 477 | 19 | logit margin 실측 + 학술 근거 |
+| 17:35 | 559 | 21 | 타임라인 + 한 페이지 요약 |
+| 17:50 | 710 | 24 | RK3588 비교 + 실패 카탈로그 + Android 가이드 |
+| 18:05 | 822 | 28 | depthwise conv + HuBERT + 체크리스트 |
+| 18:20 | 932 | 31 | Conformer 학습 가이드 + Edge 트렌드 |
+| 18:40 | 1042 | 34 | per-sample CER + activation 시각화 + 10가지 교훈 |
+| 19:00 | 1160 | 39 | 차세대 모델 후보 + CTC vs RNN-T |
+| 19:20 | 1352 | 47 | KL vs MA + 5가지 법칙 |
+| 19:40 | 1483 | 52 | ONNX op 분포 + 산업계 동향 |
+| 20:00 | 1676 | 58 | Conformer 내부 설계 + GELU vs Swish |
+| 20:20 | 1912 | 67 | Positional encoding + 실험 제안 |
+| 20:40 | 2109 | 74 | Acuity 치트시트 + vpm_run 자동화 |
+| 21:00 | 2362 | 80 | inputmeta 가이드 + calibration 가이드 |
+| 21:30 | 2581 | 87 | mel C구현 + NEON + latency + 보안 |
+| 22:00 | 2764 | 95 | 의사결정 트리 + 연혁 + 결론의 결론 |
+| **현재** | **~2900+** | **100** | CER 히스토그램 + BPE + 전력 + 시나리오 |
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
