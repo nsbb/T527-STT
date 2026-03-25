@@ -1405,6 +1405,37 @@ HuggingFace에 **`Wav2Vec2-Conformer`** 모델이 존재:
 
 ---
 
+# 51. 산업계 동향: Conformer CTC가 Edge STT의 표준
+
+## 51.1 Apple (NAACL 2024 Industry Track)
+
+> [Conformer-Based Speech Recognition On Extreme Edge-Computing Devices](https://aclanthology.org/2024.naacl-industry.12/)
+
+Apple이 **Conformer CTC를 소형 웨어러블에 배포**, 실시간보다 5.26배 빠른 추론 달성.
+모델 아키텍처 최적화 + 그래프 변환 + 수치 최적화. **정확도 손실 없이 edge 배포**.
+
+## 51.2 NVIDIA Riva (한국어 Conformer CTC)
+
+> [RIVA Conformer ASR Korean - NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/riva/models/speechtotext_ko_kr_conformer)
+
+NVIDIA가 한국어 Conformer CTC 모델을 **NGC에 공식 배포**. ~120M params, aihub 3500시간+ 학습.
+**우리 SungBeom 모델(122.5M)과 거의 같은 스펙** — 이게 산업 표준.
+
+## 51.3 업계 합의
+
+| 회사/기관 | 모델 | 용도 | 비고 |
+|----------|------|------|------|
+| **Apple** | Conformer CTC | 웨어러블 | NAACL 2024 Industry |
+| **NVIDIA** | Conformer CTC | 한국어 production | NGC 배포 |
+| **Google** | Conformer CTC/RNN-T | Pixel 기기 | 4-bit까지 양자화 |
+| **Amazon** | Conformer (ACosR) | Alexa | sub-8-bit QAT |
+| **ENERZAi** | Whisper (Conformer 계열) | 한국어 1.58-bit | CER 6.45% |
+| **우리** | **SungBeom Conformer** | **T527 NPU uint8** | **CER 10.02%** |
+
+**Conformer CTC가 edge STT의 사실상 표준.** wav2vec2는 서버용 (self-supervised learning 연구), edge에서는 Conformer.
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
