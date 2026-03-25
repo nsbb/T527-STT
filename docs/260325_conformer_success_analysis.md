@@ -1665,6 +1665,92 @@ Conformer의 설계 목표는 양자화가 아니라 **정확도 + 효율성**. 
 
 ---
 
+# 59. BPE vs Character vs Jamo: 토크나이저 선택 가이드
+
+Conformer가 **vocab 2049 BPE**로 성공했으므로, 토크나이저 선택을 재평가.
+
+| 토크나이저 | vocab 크기 | 예시 ("안녕하세요") | 토큰 수 | T527 uint8 |
+|-----------|-----------|-----------------|---------|-----------|
+| **BPE 2048** | ~2049 | "안녕" + "하세요" | 2 | **CER 10.02% ✓** |
+| BPE 5000 | ~5001 | "안녕하" + "세요" | 2 | CER 54.53% △ |
+| 음절 | ~2000 | "안"+"녕"+"하"+"세"+"요" | 5 | CER 92.83% (wav2vec2) |
+| **자모** | ~56 | "ㅇㅏㄴㄴㅕㅇㅎㅏㅅㅔㅇㅛ" | 11 | 미테스트 (Conformer) |
+
+**BPE 2048이 최적:**
+- 토큰 수가 적어서 CTC alignment 쉬움 (2 토큰 vs 음절 5 vs 자모 11)
+- 의미 단위 토큰이라 언어 모델 효과
+- **uint8 step 0.203 — 충분한 margin 확보**
+
+자모 56은 wav2vec2에서 시도했지만, Conformer에서는 **BPE가 더 나을 가능성 높음** — CTC alignment + uint8 margin 모두 유리.
+
+---
+
+# 60. Inference 파이프라인 최적화 가이드
+
+## 60.1 현재 파이프라인 (Python, 서버에서 전처리)
+
+```
+WAV (16kHz mono)
+  → NeMo mel (Python, 서버) [1, 80, T]
+  → 3초 chunk 분할 [1, 80, 301]
+  → uint8 양자화 (scale/zp)
+  → T527 NPU 추론 (233ms)
+  → uint8 dequantize
+  → CTC greedy decode
+  → BPE detokenize
+  → 한국어 텍스트
+```
+
+## 60.2 목표 파이프라인 (Android 앱, on-device)
+
+```
+마이크 입력 (16kHz)
+  → Java: mel spectrogram (NeMo 호환 구현)
+  → JNI: uint8 양자화 + NPU 추론 (awnn API)
+  → Java: CTC decode + BPE detokenize
+  → UI: 텍스트 표시
+```
+
+## 60.3 구현 과제
+
+| 과제 | 난이도 | 해결 방법 |
+|------|--------|----------|
+| NeMo mel을 Java로 구현 | ★★★ | FFT + mel filterbank + log + normalize |
+| BPE detokenize | ★★ | SentencePiece Java wrapper |
+| 슬라이딩 윈도우 관리 | ★★ | 3초 buffer + overlap 처리 |
+| NPU 모델 로드/추론 | ★ | 기존 awnn API 재사용 |
+
+**핵심 과제:** NeMo mel을 Java에서 정확하게 재현하는 것. librosa와 다르므로 NeMo 소스 코드 기반으로 구현 필요.
+
+---
+
+# 61. 비전공자를 위한 최종 비유
+
+## "왜 Conformer는 되고 wav2vec2는 안 되는가"를 초등학생도 이해할 수 있게
+
+**비유: 그림 축소 복사**
+
+```
+원본 그림 (FP32 모델): 고해상도, 모든 디테일 표현
+축소 복사 (uint8 양자화): 256색 GIF로 변환
+
+Conformer (수채화):
+  - 색이 부드럽게 퍼져있음 (activation range 안정)
+  - 256색으로 줄여도 전체적인 느낌이 유지됨
+  - "이건 고양이 그림이야" → "맞아, 고양이야" ✓
+
+wav2vec2 한국어 (유화, 극도로 세밀):
+  - 미세한 색 차이가 중요한 디테일을 표현
+  - 256색으로 줄이면 비슷한 색들이 합쳐져서 디테일 소실
+  - "이건 고양이 그림이야" → "뭔지 모르겠는데..." ✗
+
+왜 같은 구도(아키텍처)인데 수채화(Conformer)만 되는가?
+  → 수채화는 물감이 번지면서 자연스럽게 색이 합쳐짐 (Conv가 activation 안정화)
+  → 유화는 붓터치 하나하나가 중요해서 256색으로는 표현 불가 (Transformer의 정밀한 attention)
+```
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
