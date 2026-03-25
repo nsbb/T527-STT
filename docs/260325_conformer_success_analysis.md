@@ -2177,6 +2177,180 @@ T527 NPU 성능 벤치마크 (공식 자료):
 
 ---
 
+# 78. inputmeta.yml 작성 가이드
+
+T527 NB 변환에서 가장 자주 문제를 일으키는 파일. **한 글자 틀려도 양자화 실패.**
+
+## 78.1 필수 필드
+
+```yaml
+input_meta:
+  databases:
+  - path: dataset.txt        # calibration 데이터 경로 목록
+    type: TEXT                # TEXT: 파일 목록, NPY: numpy 파일
+    ports:
+    - lid: input_values_604  # ★ import 후 json에서 확인 필수
+      category: frequency    # frequency (오디오), image (이미지)
+      dtype: float32
+      sparse: false
+      tensor_name:
+      shape: [1, 80, 301]   # 모델 입력 shape과 일치해야
+      fitting: scale
+      preprocess:
+        reverse_channel: false   # ★ 오디오는 반드시 false
+        scale: 1.0
+        preproc_node_params:
+          add_preproc_node: false
+          preproc_type: TENSOR
+          preproc_perm: [0, 1, 2]
+      redirect_to_output: false
+```
+
+## 78.2 자주 발생하는 오류
+
+| 오류 | 원인 | 해결 |
+|------|------|------|
+| "Network doesn't have a valid input meta" | **lid 불일치** | import 후 json에서 `grep -o "input_values[_0-9]*"` |
+| "FileNotFoundError: dataset.txt" | 경로 문제 | Docker 마운트 확인 |
+| 양자화 후 쓰레기 출력 | **reverse_channel: true** | **false로 변경** |
+| 양자화 후 ALL PAD | calibration 데이터 부족 | 10개 이상 사용 |
+| AssertionError | yaml 문법 오류 | **TAB 사용 금지** (스페이스만) |
+
+## 78.3 lid 찾는 방법
+
+```bash
+# import 후 json에서 검색
+grep -o "input_values[_0-9]*" MODEL.json | sort -u
+# 또는
+python3 -c "
+import json
+d = json.load(open('MODEL.json'))
+for k, l in d['Layers'].items():
+    if l.get('op') == 'input':
+        print(l['name'], '→ lid:', k)
+"
+```
+
+---
+
+# 79. calibration 데이터 준비 가이드
+
+## 79.1 원칙
+
+- **실제 추론 데이터와 유사한 분포** — 실제 환경의 오디오 사용
+- **최소 10개, 권장 50개** — 너무 적으면 outlier에 민감, 너무 많으면 over-fitting
+- **3초 고정 길이** (301 frames) — NB 입력과 동일
+
+## 79.2 Conformer (NeMo mel)
+
+```python
+# NeMo Docker에서
+import nemo.collections.asr as nemo_asr
+m = nemo_asr.models.EncDecCTCModelBPE.restore_from('model.nemo', map_location='cpu')
+m.preprocessor.featurizer.dither = 0.0   # 필수!
+m.preprocessor.featurizer.pad_to = 0     # 필수!
+
+for wav_path in wav_list:
+    audio = load_wav(wav_path)  # 16kHz mono
+    mel, _ = m.preprocessor(audio_tensor, length_tensor)
+    mel_3s = mel[:, :, :301]  # 3초 truncate
+    np.save(f'calib/calib_{i:04d}.npy', mel_3s.numpy())
+```
+
+## 79.3 wav2vec2 (raw waveform)
+
+```python
+audio = load_wav(wav_path)  # 16kHz, [-1, 1]
+audio_3s = audio[:48000]    # 3초 truncate
+np.save(f'calib/calib_{i:04d}.npy', audio_3s.reshape(1, -1))
+```
+
+## 79.4 dataset.txt 형식
+
+```
+calib/calib_0000.npy
+calib/calib_0001.npy
+...
+calib/calib_0049.npy
+```
+
+**주의:** Docker에서 실행 시 경로가 **Docker 내부 경로**와 일치해야 함.
+
+---
+
+# 80. 최종 문서 구조 목차
+
+이 문서의 전체 목차:
+
+```
+Part I: 결론과 개요 (섹션 1-3)
+  1. Executive Summary
+  2. 스코어보드 (15개 모델)
+  3. uint8 양자화 비전공자 설명
+
+Part II: 7가지 성공/실패 요인 (섹션 4-10)
+  4. 아키텍처 (CNN hybrid vs Transformer)
+  5. 입력 타입 (mel vs raw waveform)
+  6. 위치 인코딩 (relative vs convolutional)
+  7. Subsampling (조기 차원 축소)
+  8. Activation 분포 (530개 레이어 실측)
+  8.5. Logit margin 실측 비교
+  9. ONNX 그래프 복잡도
+  10. 출력 헤드 설계
+
+Part III: 비교 분석 (섹션 10.5-13)
+  10.5. cwwojin vs SungBeom
+  11. Vocab 신화 교정
+  12. 시뮬레이션 vs 디바이스
+  13. T527 하드웨어 제약
+
+Part IV: 실험 결과 (섹션 14-18)
+  14. 모델 선택 가이드라인
+  15. Split Model 결과
+  16. QAT 결과
+  17. 최종 권고
+  18. 학술 근거 (5편)
+
+Part V: 심층 분석 (섹션 18.5-58)
+  18.5. 반론 논문 + 반박
+  19. 영어 vs 한국어 wav2vec2
+  20. 실험 타임라인
+  21. 한 페이지 요약
+  22. T527 vs RK3588
+  23. 실패 카탈로그
+  24. Android 배포 가이드
+  25. Depthwise conv 수학적 직관
+  26. HuBERT 분석
+  27. Acuity 6.12 vs 6.21
+  28. 체크리스트
+  29-31. Conformer 학습 가이드 + Edge 트렌드 + 향후 방향
+  32-33. Per-sample CER + Activation 시각화
+  34. 10가지 교훈
+  35-38. 파라미터표 + int16 비교 + 가설 검증 + 비용 분석
+  39. 차세대 모델 후보
+  40-43. CTC vs RNN-T + mel 차이 + 윈도우 + 투자 분석
+  44-45. NPU op 현황 + 문서 인덱스
+  46-47. KL vs MA + 5가지 법칙
+  48-50. Wav2Vec2-Conformer + Outlier 논문 + 최종 메시지
+  51-52. 산업계 동향 + ONNX op 분포
+  53-55. Streaming + Pad fix + Memory Pool
+  56. 참고문헌 25편
+  57-58. Conformer 내부 설계 + 실패 패턴
+  59-61. BPE 가이드 + 추론 파이프라인 + 비유
+  62-65. KoCitrinet + LayerNorm + 학습 팁 + 의의
+  66-67. Position encoding + 실험 제안 12개
+  68-69. 문서 필요성 + 용어 사전
+  70. FAQ 10개
+  71-74. Subsampling + 프레임워크 비교 + 치트시트 + 자동화
+  75-77. ONNX 크기 + NPU 성능 + DNA 패턴
+  78-79. inputmeta 가이드 + calibration 가이드
+  80. 이 목차
+
+부록: Vocab 56 철회
+```
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
