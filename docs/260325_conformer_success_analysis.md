@@ -1579,6 +1579,92 @@ SungBeom과 wav2vec2 KO는 같은 memory pool(14.7MB) — 둘 다 3초 입력(48
 
 ---
 
+# 57. Conformer 내부 설계의 양자화 관점 해석
+
+## 57.1 Macaron 구조: 왜 FFN이 반씩 둘인가
+
+Conformer 블록:
+```
+입력 → [FFN ½] → [Multi-Head Self-Attention] → [Conv] → [FFN ½] → 출력
+       ^^^^^^^^                                         ^^^^^^^^
+       마카롱의 윗 쿠키                                 마카롱의 아랫 쿠키
+```
+
+**Macaron-Net 원리:** FFN을 하나가 아니라 **두 개의 절반짜리**로 나누어 Attention/Conv을 샌드위치.
+
+**양자화 관점:**
+- FFN ½은 **값 범위를 절반으로 축소** (half-step residual)
+- Attention 전후에 FFN이 있어서 **activation range가 급변하는 것을 방지**
+- 일반 Transformer: FFN → Attention → (값 폭발) → 다음 레이어
+- Conformer: FFN½ → Attention → Conv(안정화) → FFN½ → (값 안정) → 다음 레이어
+
+## 57.2 Conv가 Attention 뒤에 와야 하는 이유
+
+Google의 ablation study에서 **Conv를 Attention 앞에 놓으면 성능 저하** 확인.
+
+**양자화 관점 해석:**
+```
+순서 A (Conformer): Attention → Conv
+  Attention이 activation 넓힘 → Conv가 local averaging으로 다시 좁힘 ✓
+
+순서 B (역순): Conv → Attention
+  Conv가 local feature 추출 → Attention이 global로 넓힘 (안 좁혀짐) ✗
+```
+
+**핵심:** Conv가 Attention **뒤에** 와서 "정규화기" 역할을 해야 uint8에서 안정.
+
+## 57.3 GLU (Gated Linear Unit) activation
+
+Conformer Conv 모듈에서 pointwise conv 후 **GLU** 사용:
+```
+GLU(x) = x[:, :half] × sigmoid(x[:, half:])
+```
+
+**vs wav2vec2의 GELU:**
+```
+GELU(x) = x × Φ(x) = x × 0.5 × (1 + erf(x/√2))
+```
+
+| | GLU (Conformer) | GELU (wav2vec2) |
+|---|---|---|
+| 게이팅 | sigmoid (0~1, 부드러움) | erf 기반 (급변) |
+| 출력 범위 | 입력의 절반 차원, 값 bounded | 입력과 같은 차원, 값 unbounded |
+| uint8 호환성 | **좋음** | 나쁨 |
+
+GLU는 채널의 절반을 "게이트"로 사용하여 나머지 절반을 **0~1 범위로 스케일링** → 자연스러운 값 범위 제한 → uint8 친화적.
+
+## 57.4 Conformer가 "양자화를 위해 설계된 건 아니지만 양자화에 유리한 이유"
+
+Conformer의 설계 목표는 양자화가 아니라 **정확도 + 효율성**. 하지만 그 설계 선택들이 **우연히 양자화에 유리**:
+
+| 설계 선택 | 원래 목적 | 양자화 부수 효과 |
+|----------|----------|---------------|
+| Depthwise Conv(31) | local feature 캡처 | activation range 안정화 |
+| Macaron FFN ½ | 학습 안정성 | 값 범위 축소 |
+| Conv after Attention | global→local 순서 | Attention 후 정규화 |
+| GLU activation | gating mechanism | 값 범위 bounding |
+| Relative pos enc | 상대 위치 | bounded 값 |
+| Swish (not GELU) | 부드러운 활성화 | uint8 근사 안정 |
+
+---
+
+# 58. 모든 실패의 공통 패턴
+
+15개+ 모델에서 **실패한 모든 경우의 공통점**:
+
+```
+1. 순수 Transformer 아키텍처 (CNN이 Attention 뒤에 없음)
+2. 또는 모델이 너무 큼 (5000+ ONNX nodes → 오차 누적)
+3. 또는 NB 크기 > 120MB (NPU 메모리 제한)
+```
+
+**예외:** 영어 wav2vec2 (순수 Transformer이지만 성공)
+→ 이유: 960시간 대규모 영어 데이터로 **sharp attention** 학습 → activation range 좁음 → uint8 생존
+
+**교훈:** 순수 Transformer가 uint8에서 동작하려면 **매우 많은 데이터 + 해당 언어에 최적화된 weight**가 필요. 한국어처럼 데이터가 부족하거나 transfer learning한 경우 attention이 "soft" → uint8 실패.
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
