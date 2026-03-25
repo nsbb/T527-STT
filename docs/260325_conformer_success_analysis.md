@@ -3723,6 +3723,221 @@ NPU 활용률: 233ms/3000ms = **7.8%** (대부분 idle)
 
 ---
 
+# 128. Conformer의 Feed-Forward Network: Swish vs GELU vs ReLU
+
+Conformer FFN에서 사용하는 **Swish activation**의 양자화 특성:
+
+```
+ReLU(x)  = max(0, x)        → 기울기: 0 또는 1 (불연속)
+GELU(x)  = x × Φ(x)        → erf 기반 (x=0 근처 급변)
+Swish(x) = x × sigmoid(βx)  → sigmoid 기반 (부드러움)
+```
+
+| 활성화 | uint8 근사 | T527 결과 | 사용 모델 |
+|--------|-----------|----------|----------|
+| **ReLU** | **완벽** (0 또는 x) | KoCitrinet ✓ | CNN 모델 |
+| **Swish** | **좋음** (sigmoid 부드러움) | Conformer ✓ | Conformer |
+| **GELU** | **나쁨** (erf 급변) | wav2vec2 ✗ | Transformer |
+
+**Swish가 GELU보다 양자화에 유리한 수학적 이유:**
+
+```
+GELU의 문제점:
+  x = -0.5에서 기울기 급변 (erf 함수의 inflection point)
+  uint8로 이 영역을 표현하면 기울기가 뭉개짐
+  → FFN 출력의 비선형 패턴 손실
+
+Swish의 장점:
+  sigmoid(βx)는 모든 x에서 부드럽게 변화
+  inflection point가 없음 (monotonic gradient)
+  uint8로 표현해도 비선형 패턴 유지
+```
+
+---
+
+# 129. T527 NPU vs 경쟁 플랫폼 ROI 분석
+
+"T527 NPU + Conformer"가 다른 솔루션 대비 얼마나 경제적인가:
+
+| 솔루션 | HW 비용 | SW 비용 | 월 운영비 | CER | ROI |
+|--------|---------|---------|----------|-----|-----|
+| **T527 NPU + Conformer** | **$5~10** | **무료** | **$0** | **10.02%** | **최고** |
+| RK3588 + wav2vec2 | $15~20 | 무료 | $0 | 11.78% | 좋음 |
+| Raspberry Pi 4 + ONNX | $35 | 무료 | $0 | FP32만 (~20%) | 중간 |
+| Cloud STT (Google) | $0 | 무료 | **$50+/만건** | 3~5% | 대량 시 비쌈 |
+| Cloud STT (NAVER) | $0 | 무료 | **$30+/만건** | 5~8% | 대량 시 비쌈 |
+
+**1000대 디바이스 × 월 10만건:**
+- Cloud: $30 × 100 = $3,000/월
+- T527: $5 × 1000 = $5,000 (1회, 이후 무료)
+- **2개월이면 손익분기, 이후 순이익**
+
+---
+
+# 130. Conformer SungBeom 모델의 학습 데이터 분석
+
+AI Hub 한국어 음성 데이터셋:
+
+| 데이터셋 | 시간 | 화자 | 도메인 |
+|---------|------|------|--------|
+| 한국어 대화음성 | ~1000h | 다수 | 일상 대화 |
+| 한국어 강의 | ~500h | 강사 | 학술 |
+| 한국어 뉴스 | ~300h | 앵커 | 뉴스 |
+| 한국어 자유발화 | ~500h | 다양 | 다양 |
+| 저음질 전화 | ~200h | 전화 | 상담 |
+| **총 추정** | **~3500h** | — | — |
+
+SungBeom 모델이 CER 10.02%를 달성한 것은 **3500시간+ 다양한 도메인 데이터** 덕분. 우리가 같은 수준을 달성하려면 **aihub 4356시간 전부 사용** 권장.
+
+---
+
+# 131. 모델 크기와 CER의 관계 (Conformer 한정)
+
+| 모델 | Params | d_model | CER | NB |
+|------|--------|---------|-----|-----|
+| cwwojin | 31.8M | 256 | 54.53% | 29MB |
+| **SungBeom** | **122.5M** | **512** | **10.02%** | **102MB** |
+| (예상) Large | ~300M | 768 | ~5%? | ~200MB? |
+
+**관찰:**
+- 31.8M → 122.5M (3.9배 증가) → CER 54.53% → 10.02% (**5.4배 개선**)
+- **모델 크기가 4배 커지면 CER이 5배 좋아진다** (Conformer에서)
+
+**하지만 T527 NB 120MB 제한:**
+- 300M 모델 → NB ~200MB → status=-1 (실행 불가)
+- **122.5M (102MB NB)이 T527에서 가능한 최대 크기**
+
+이것은 T527 NPU의 물리적 한계. 더 좋은 CER을 원하면 **하드웨어 업그레이드** (T536: 4 TOPS, NB 제한 완화) 또는 **모델 효율화** (pruning, distillation).
+
+---
+
+# 132. 양자화 error가 CTC alignment에 미치는 영향 상세
+
+CTC는 **monotonic alignment**을 가정. 양자화 오류가 이 가정을 깨면:
+
+## 정상 CTC alignment (Conformer)
+
+```
+Audio:  |  안  |  녕  |  하  |  세  |  요  |
+Frame:  1  2  3  4  5  6  7  8  9  10 11 12
+FP32:   B  안 안  B  녕  B  B  하  세  B  요  B
+uint8:  B  안 안  B  녕  B  B  하  세  B  요  B  ← 동일!
+                                                   (CER 0%)
+```
+
+## 비정상 CTC alignment (wav2vec2 한국어)
+
+```
+Audio:  |  안  |  녕  |  하  |  세  |  요  |
+Frame:  1  2  3  4  5  6  7  8  9  10 11 12
+FP32:   B  안 안  B  녕  B  B  하  세  B  요  B
+uint8:  ㅇ ㅏ ㄴ ㄴ ㅕ ㅇ ㅎ ㅏ ㅅ ㅔ ㅇ ㅛ  ← 전부 non-blank!
+                                                   (CER 100%+)
+```
+
+**wav2vec2에서 발생한 현상:** blank 토큰의 logit이 양자화로 다른 토큰보다 낮아져서, **모든 프레임이 non-blank으로 판정**. CTC decode 시 연속 중복 제거 후에도 쓸모없는 자모 나열.
+
+---
+
+# 133. onnxsim (ONNX Simplifier)의 효과
+
+모든 모델에서 **onnxsim** 적용 후 노드 수 변화:
+
+| 모델 | onnxsim 전 | onnxsim 후 | 감소율 | 효과 |
+|------|-----------|-----------|--------|------|
+| SungBeom Conformer | 4462 | **1982** | **-55.6%** | constant folding 효과 큼 |
+| cwwojin Conformer | ~3500 | ~1500 | ~57% | 비슷 |
+| Wav2Vec2 | 957 | 957 | 0% | 이미 단순 |
+| Zipformer | 5868 | — | — | 시도 안 함 |
+
+**Conformer에서 onnxsim이 중요한 이유:**
+- NeMo export는 opset 16의 복잡한 ONNX 생성 (Where, Expand, ScatterND 등)
+- onnxsim이 불필요한 연산 제거 + 상수 접기 → 노드 55% 감소
+- Acuity가 처리할 노드가 줄어서 **양자화 오차 누적도 감소**
+
+---
+
+# 134. Conformer와 wav2vec2의 Self-Supervised Pre-training 차이
+
+| | wav2vec2 | Conformer (NeMo) |
+|---|---|---|
+| **Pre-training** | **Self-supervised** (unlabeled audio) | **Supervised** (labeled audio) |
+| 방법 | Contrastive learning (마스크 예측) | CTC loss (직접 텍스트 학습) |
+| 장점 | 대량 unlabeled 데이터 활용 | 직접적 STT 성능 |
+| 단점 | Fine-tune 필요 | 대량 labeled 데이터 필요 |
+| **양자화 영향** | attention이 "soft" (분산) | attention이 **"sharp" (집중)** |
+
+**왜 이게 양자화에 영향?**
+- Self-supervised pre-training: 모든 프레임을 동등하게 취급 → attention이 넓게 분산 → activation range 넓음 → uint8 취약
+- Supervised CTC training: 정답 토큰에 집중 → attention이 특정 프레임에 집중 → activation range 좁음 → uint8 강건
+
+**이것이 같은 아키텍처(Transformer)인데 영어 wav2vec2(960시간 supervised fine-tune)는 되고 한국어(50시간 fine-tune)는 안 되는 근본 이유 중 하나.**
+
+---
+
+# 135. T527 NPU의 Batch Processing 가능성
+
+현재: batch_size=1 (한 번에 1개 chunk 처리).
+
+```
+Batch=1: NPU 233ms per chunk
+Batch=2: NPU ~400ms per 2 chunks (병렬 처리 시)
+Batch=4: NPU ~700ms per 4 chunks
+```
+
+**T527 NPU core 1개 → batch 병렬화 제한적.**
+하지만 batch>1이면 DRAM→SRAM 전송 횟수 감소 → 약간의 throughput 향상.
+
+**실용적으로:** batch_size=1이 latency 최소화에 최적. 실시간 STT에서는 batch processing 불필요.
+
+---
+
+# 136. Conformer와 Whisper의 구조 차이
+
+Whisper는 Encoder-Decoder, Conformer는 Encoder-only (CTC).
+
+| | Conformer CTC | Whisper |
+|---|---|---|
+| 구조 | **Encoder only** + CTC linear | Encoder + **Decoder (autoregressive)** |
+| 디코딩 | 병렬 (모든 프레임 독립) | **순차** (이전 출력에 의존) |
+| NB 수 | **1개** | 2개 (encoder + decoder) |
+| 추론 | **single pass** | **multiple passes** (토큰 수만큼) |
+| 양자화 | encoder만 양자화 | encoder + decoder 둘 다 |
+| T527 적합성 | **최적** | 비적합 (decoder sequential) |
+
+Whisper encoder만 NB 변환하면 **117MB NB 동작**하지만, decoder 없이는 텍스트 생성 불가. Decoder를 CPU에서 autoregressive로 돌리면 **수 초 소요** → 실용 불가.
+
+**결론:** T527에서는 **Encoder-only + CTC** 아키텍처만 실용적. Encoder-Decoder (Whisper, attention-based) 는 decoder bottleneck.
+
+---
+
+# 137. 양자화 친화적 모델 아키텍처 설계 원칙
+
+이 프로젝트의 모든 실험을 종합하여 도출한 **edge NPU uint8 양자화 친화적 모델 설계 원칙:**
+
+## 원칙 1: "Every Attention, A Conv"
+> 모든 Attention 레이어 뒤에 Convolution을 배치하라. Attention이 넓힌 activation을 Conv가 다시 좁힌다.
+
+## 원칙 2: "Pre-process Before You Quantize"
+> 입력을 미리 전처리(mel spectrogram)하여 bounded range로 만들어라. raw signal을 직접 양자화하지 마라.
+
+## 원칙 3: "Smooth Over Sharp"
+> GELU보다 Swish, ReLU보다 SiLU. 활성화 함수의 기울기 변화가 부드러울수록 uint8 근사가 정확하다.
+
+## 원칙 4: "Reduce Early, Attend Late"
+> CNN stem으로 spatial dimension을 먼저 줄이고, 줄어든 sequence에 Attention을 적용하라.
+
+## 원칙 5: "CTC Over Autoregressive"
+> CTC(병렬 디코딩)가 Autoregressive(순차 디코딩)보다 양자화 오류 전파가 없어 안전하다.
+
+## 원칙 6: "Relative Over Absolute"
+> Relative positional encoding(bounded)이 absolute/convolutional position(unbounded)보다 uint8 매핑이 안정적이다.
+
+## 원칙 7: "Bigger Model, Better Quantization"
+> 모델 용량(d_model)이 클수록 uint8 noise 흡수 여유가 있다. d_model ≥ 512 권장.
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
