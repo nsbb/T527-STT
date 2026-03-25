@@ -699,6 +699,118 @@ SungBeom Conformer를 Android 앱에 통합하는 방법.
 
 ---
 
+# 25. Conformer Depthwise Conv의 수학적 직관
+
+## 25.1 왜 kernel=31인가
+
+Conformer의 depthwise conv는 **1D convolution, kernel size=31**.
+31 프레임 = 약 0.3초 (stride 10ms 기준). 이것이 **음소(phoneme) 하나의 길이**에 해당.
+
+```
+kernel=3:  너무 짧음 (0.03초) → 음향 특성 캡처 못 함
+kernel=7:  모음/자음 전환 정도 → 부족
+kernel=31: 음소 하나의 전체 패턴 → 적절
+kernel=63: 음절 수준 → 너무 길어서 인접 음절과 혼합
+```
+
+## 25.2 왜 depthwise conv가 양자화에 유리한가
+
+```
+Standard conv: output[c] = Σ(all_channels) weight[c,ch] × input[ch]
+  → 모든 채널을 합산 → 값 범위 크게 변동 가능
+
+Depthwise conv: output[c] = weight[c] × input[c]  (같은 채널끼리만)
+  → 채널 독립 → 각 채널의 값 범위가 독립적으로 bounded
+  → uint8 per-tensor quantization에서도 각 채널의 정보 보존
+```
+
+**Self-attention과의 대비:**
+```
+Self-attention: output[t] = Σ(all_frames) softmax(Q×K^T) × V
+  → 모든 프레임의 가중합 → 값 범위 예측 불가
+  → uint8에서 softmax weight가 깎이면 전체 출력 왜곡
+```
+
+## 25.3 Conformer에서 Conv의 역할: Attention의 "정규화기"
+
+```
+Attention 출력: 값 범위 넓음 (global dependency → outlier 발생)
+Conv 통과 후: 값 범위 좁아짐 (local averaging → outlier 억제)
+```
+
+이것이 **Conformer가 18개 레이어를 거쳐도 activation이 폭발하지 않는 이유**. 매 레이어마다 Conv가 activation을 "재정규화"하여 uint8 범위 내에 유지.
+
+wav2vec2는 이 "재정규화"가 없어서 레이어를 거칠수록 activation range가 넓어지고, L8-11에서 파괴적 수준에 도달.
+
+---
+
+# 26. HuBERT 한국어 — wav2vec2와 동일한 실패
+
+| 항목 | HuBERT KO | wav2vec2 KO | 비교 |
+|------|----------|-----------|------|
+| 모델 | HJOK/asr-hubert-base-ko | Kkonjeong/wav2vec2-base-korean | — |
+| Params | 96M | 94.4M | 유사 |
+| 아키텍처 | **Transformer** (HuBERT) | **Transformer** (wav2vec2) | **동일 유형** |
+| ONNX | 384MB, 727 nodes | 361MB, 957 nodes | 유사 |
+| NB | 76MB | 72MB | 유사 |
+| Vocab | 2145 | 56 | HuBERT가 38배 큼 |
+| **uint8 CER** | **100% (동일 토큰 반복)** | **100.86%** | **둘 다 실패** |
+
+HuBERT도 **순수 Transformer 기반 self-supervised learning** 모델. vocab이 2145(HuBERT)이든 56(wav2vec2)이든 관계없이 둘 다 uint8에서 실패. **아키텍처가 원인이라는 추가 증거.**
+
+---
+
+# 27. Acuity 6.12 vs 6.21 비교
+
+영어 wav2vec2에서 실측한 Acuity 버전 비교:
+
+| 양자화 | Acuity | CER | WER | NB |
+|--------|--------|-----|-----|-----|
+| **uint8 AA** | **6.12** | **17.52%** | **27.38%** | **87MB** |
+| PCQ int8 | 6.21 | 19.24% | 34.39% | 99MB |
+| uint8 AA | 6.21 | 23.41% | 40.57% | 76MB |
+
+**Acuity 6.12가 6.21보다 우수.** 새 버전이 항상 좋은 건 아님. 내부 그래프 최적화 전략 차이로 추정.
+
+Conformer NB 변환에도 Acuity 6.12 사용 권장.
+
+---
+
+# 28. 양자화 가능성 사전 판단 체크리스트
+
+새 모델을 T527 NPU에 배포하기 전에 **이 체크리스트로 사전 판단**:
+
+## ✅ 통과해야 하는 항목
+
+- [ ] **아키텍처에 CNN이 포함되어 있는가?** (Conformer, Citrinet 등)
+  - 순수 Transformer → 실패 확률 높음
+- [ ] **입력이 mel spectrogram인가?**
+  - raw waveform → 위험
+- [ ] **ONNX 노드 수 < 3000인가?**
+  - 5000+ → 오차 누적 위험
+- [ ] **d_model ≥ 512인가?**
+  - 256 이하 → uint8 noise 흡수 부족
+- [ ] **vocab < 5000인가?**
+  - 5000+ → margin 부족 위험 (부차적이지만 참고)
+- [ ] **NB 크기 < 120MB 예상인가?**
+  - 초과 → status=-1 거부
+
+## ⚠️ 주의 항목
+
+- [ ] **Acuity 6.12로 변환** (6.21보다 우수한 경우 있음)
+- [ ] **reverse_channel: false 확인** (오디오 모델 필수)
+- [ ] **NeMo 모델이면 dither=0.0, pad_to=0** 설정
+- [ ] **반드시 T527 디바이스에서 CER 실측** (시뮬레이션 불신뢰)
+
+## 🚫 시도하지 말 것
+
+- [ ] wav2vec2/HuBERT 한국어 → uint8 (반드시 실패)
+- [ ] Zipformer (5868 nodes) → 어떤 양자화도 실패
+- [ ] XLS-R-300M → 24L, ALL PAD
+- [ ] vocab 56 전환 (아키텍처 문제를 vocab으로 해결 불가)
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
