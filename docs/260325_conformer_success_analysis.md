@@ -2098,6 +2098,85 @@ Windows adb.exe 사용 시 경로: `/mnt/c/Users/nsbb/AppData/Local/Android/Sdk/
 
 ---
 
+# 75. 모든 모델의 ONNX 파일 크기 비교
+
+| 모델 | ONNX 원본 | onnxsim 후 | ONNX 노드 | NB | 비율 |
+|------|----------|-----------|----------|-----|------|
+| **SungBeom Conformer** | 491MB | 477MB | 1982 | 102MB | 21% |
+| cwwojin Conformer | 128MB | 126MB | ~1500 | 29MB | 23% |
+| SpeechBrain Conformer | 134MB | — | 1438 | 실패 | — |
+| KoCitrinet 300f | 543MB (ONNX) | 40MB (sim) | ~200 | 62MB | — |
+| Wav2Vec2 EN (5s) | 361MB | 361MB | 957 | 87MB | 24% |
+| Wav2Vec2 KO | 361MB | 361MB | 957 | 72MB | 20% |
+| Wav2Vec2 XLS-R-300M | 1.27GB | — | — | 249MB | 20% |
+| Zipformer Encoder | 280MB | — | 5868 | 63MB | 23% |
+| HuBERT KO | 384MB | — | 727 | 76MB | 20% |
+| DeepSpeech2 | — | — | — | 56MB | — |
+| Whisper tiny encoder | 33MB | — | 211 | 117MB | 354% (!!) |
+
+**관찰:**
+- NB/ONNX 비율 ~20-24% (uint8 = FP32의 1/4)
+- Whisper tiny는 NB가 ONNX보다 **3.5배 큼** — 30초 고정 입력으로 변환해서 internal buffer가 매우 큼
+- NB 크기는 params보다 **입력 길이에 더 영향** 받음 (Whisper 30초 vs 다른 모델 3~5초)
+
+---
+
+# 76. T527 NPU Clock Speed와 성능 관계
+
+T527 NPU 성능 벤치마크 (공식 자료):
+
+| 모델 | 입력 | 546MHz FPS | 696MHz FPS | 비고 |
+|------|------|-----------|-----------|------|
+| MobileNet V1 | 224² | 367 | — | 이미지 |
+| MobileNet V2 | 224² | 309 | 381 | 이미지 |
+| Inception v3 | 299² | 32.3 | 40.5 | 이미지 |
+| YOLOv5s | 640² | 5.36 | 6.33 | 객체 탐지 |
+
+**우리 STT 모델 (실측):**
+
+| 모델 | 입력 | 추론 시간 | FPS 환산 |
+|------|------|---------|---------|
+| KoCitrinet | [1,80,300] | 120ms | 8.3 |
+| SungBeom Conformer | [1,80,301] | 233ms | 4.3 |
+| cwwojin Conformer | [1,80,301] | 111ms | 9.0 |
+| Wav2Vec2 KO (3s) | [1,48000] | 415ms | 2.4 |
+| Wav2Vec2 EN (5s) | [1,80000] | 715ms | 1.4 |
+
+**STT 모델은 이미지 모델보다 느림** — 입력 크기(48000/80000 samples)가 이미지(224²=50176)보다 크고, Transformer 연산이 CNN보다 무거움.
+
+---
+
+# 77. 모든 성공/실패 모델의 공통 특성 정리
+
+## 성공한 모델의 DNA
+
+```
+✓ CNN + Attention 하이브리드 또는 CNN only
+✓ mel spectrogram 입력 (bounded range)
+✓ d_model ≥ 512 (또는 CNN only라 불필요)
+✓ vocab ≤ 2049
+✓ NB ≤ 120MB
+✓ CTC decoder
+✓ NeMo 프레임워크
+```
+
+## 실패한 모델의 DNA
+
+```
+✗ 순수 Transformer (CNN이 매 레이어에 없음)
+✗ 또는 raw waveform 입력 (unbounded activation)
+✗ 또는 ONNX 5000+ 노드 (오차 누적)
+✗ 또는 NB > 120MB
+✗ 또는 vocab > 5000 (부차적 요인)
+✗ 또는 RNN-Transducer (autoregressive 오류 전파)
+```
+
+**예외:** 영어 wav2vec2 (순수 Transformer + raw waveform이지만 성공)
+→ 이유: 960시간 대규모 영어 데이터로 sharp attention 학습 → activation range 좁음 → uint8 생존
+→ 교훈: 순수 Transformer도 **충분한 데이터 + 해당 언어 최적화**면 가능. 하지만 이건 특수한 경우.
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
