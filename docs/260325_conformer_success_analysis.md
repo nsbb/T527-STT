@@ -1472,6 +1472,113 @@ Swish(x) = x × sigmoid(βx)
 
 ---
 
+# 53. Streaming Conformer 가능성
+
+현재 SungBeom 모델은 **3초 고정 입력** → 슬라이딩 윈도우로 긴 오디오 처리.
+실시간 STT에는 **Streaming Conformer**가 필요.
+
+## 53.1 Streaming 방식
+
+| 방식 | 설명 | T527 적용 |
+|------|------|----------|
+| **Chunk-based** | 고정 크기 청크 순차 처리 (현재 방식) | ✓ 현재 동작 |
+| **Causal attention** | 미래 프레임 참조 안 함 | NB 재변환 필요 |
+| **Look-ahead** | 제한된 미래 프레임만 참조 | NB 재변환 필요 |
+
+## 53.2 현재 방식의 한계
+
+현재 3초 chunk → 각 chunk 독립 추론 → CTC 결과 연결.
+- 장점: 단순, 안정
+- 단점: chunk 경계에서 단어 잘림, overlap 비효율
+
+## 53.3 개선: 5초 또는 10초 chunk
+
+NB 입력 길이를 **5초(501 frames)** 또는 **10초(1001 frames)**로 변경:
+- NB 재변환만 하면 됨 (ONNX static shape 변경)
+- chunk 수 감소 → 경계 오류 감소
+- NB 크기 약간 증가 (102MB → ~110-130MB, 120MB 제한 내)
+- 추론 시간 비례 증가 (233ms → ~400-800ms)
+
+---
+
+# 54. Conformer NB 변환 Pad op 수정 상세
+
+Conformer ONNX에서 Acuity 호환을 위해 **유일하게 필요한 수정**:
+
+```python
+# 18개 Pad op의 빈 constant_value를 0.0으로 설정
+pad_const = numpy_helper.from_array(np.array(0.0, dtype=np.float32), name="__pad_zero__")
+model.graph.initializer.append(pad_const)
+for node in model.graph.node:
+    if node.op_type == "Pad" and len(node.input) >= 3 and node.input[2] == '':
+        node.input[2] = "__pad_zero__"
+```
+
+**이것만 수정하면 됨.** Where op 54개는 **절대 건드리지 않음** — Acuity가 자동으로 SELECT+SWITCH로 변환.
+
+이전 실패 교훈: Where op을 수동 제거했더니 shape inference가 깨져서 모델 망가짐.
+
+---
+
+# 55. T527 NPU Memory Pool 크기 비교
+
+vpm_run에서 보고되는 `memory pool size`:
+
+| 모델 | memory pool | NB | 비고 |
+|------|-----------|-----|------|
+| **SungBeom Conformer** | **14.7MB** | 102MB | — |
+| Wav2Vec2 KO (full) | 14.7MB | 72MB | — |
+| Wav2Vec2 KO (encoder only) | 14.7MB | 75MB | — |
+| Wav2Vec2 KO (L0-7 only) | 14.7MB | 52MB | — |
+| Wav2Vec2 KO (TF only) | **0.9MB** | 72MB | CNN 없이 작음 |
+| Wav2Vec2 EN (full) | 24.6MB | 87MB | 5초 입력이라 큼 |
+
+**관찰:** memory pool은 NB 크기와 정비례하지 않음. 입력 크기(48000 vs 80000)에 영향받음.
+SungBeom과 wav2vec2 KO는 같은 memory pool(14.7MB) — 둘 다 3초 입력(48000 samples).
+
+---
+
+# 56. 최종 참고 문헌 목록
+
+이 분석에서 참조한 모든 논문 및 기술 자료:
+
+## 아키텍처
+1. [Conformer: Convolution-augmented Transformer (Google, INTERSPEECH 2020)](https://arxiv.org/abs/2005.08100)
+2. [Squeezeformer: Efficient Transformer for ASR (NeurIPS 2022)](https://arxiv.org/pdf/2206.00888)
+3. [E-Branchformer: Enhanced Merging (SLT 2022)](https://arxiv.org/abs/2210.00077)
+4. [wav2vec 2.0: Self-Supervised Learning (NeurIPS 2020)](https://arxiv.org/abs/2006.11477)
+
+## 양자화
+5. [4-bit Conformer Native QAT (Google, INTERSPEECH 2022)](https://arxiv.org/abs/2203.15952)
+6. [1-bit Conformer (INTERSPEECH 2025)](https://arxiv.org/abs/2505.21245)
+7. [ACosR: QAT for ASR (Amazon, INTERSPEECH 2020)](https://www.amazon.science/publications/quantization-aware-training-with-absolute-cosine-regularization-for-automatic-speech-recognition)
+8. [Sub-8-Bit QAT for 8-Bit NPU (Amazon, INTERSPEECH 2022)](https://arxiv.org/abs/2206.15408)
+9. [Edge-ASR: Low-Bit Quantization (Qualcomm, 2025)](https://arxiv.org/abs/2507.07877)
+10. [Quantizable Transformers: Removing Outliers (NeurIPS 2023)](https://proceedings.neurips.cc/paper_files/paper/2023/file/edbcb7583fd8921dad78adecfe06a99b-Paper-Conference.pdf)
+11. [Activation Outliers in Transformer Quantization (2025)](https://arxiv.org/abs/2603.04308)
+12. [R2 Loss: Range Restriction (2023)](https://arxiv.org/abs/2303.08253)
+13. [LSQ: Learned Step Size Quantization (ICLR 2020)](https://arxiv.org/abs/1902.08153)
+14. [SmoothQuant: W8A8 for Transformers (2022)](https://arxiv.org/abs/2211.10438)
+
+## Edge 배포
+15. [Conformer on Extreme Edge-Computing (Apple, NAACL 2024)](https://aclanthology.org/2024.naacl-industry.12/)
+16. [INT8 Conformer on ARM Ethos-U85 (2025)](https://developer.arm.com/community/arm-community-blogs/b/internet-of-things-blog/posts/end-to-end-int8-conformer-on-arm-training-quantization-and-deployment-on-ethos-u85)
+17. [ENERZAi: Korean 1.58-bit Whisper (2025)](https://enerzai.com/resources/blog/small-models-big-heat-conquering-korean-asr-with-low-bit-whisper)
+18. [NVIDIA Riva Korean Conformer CTC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/riva/models/speechtotext_ko_kr_conformer)
+
+## 비교/분석
+19. [Assessing Robustness of Conformer/Transformer Under Compression (EUSIPCO 2024)](https://eurasip.org/Proceedings/Eusipco/Eusipco2024/pdfs/0000336.pdf)
+20. [E-Branchformer vs Conformer Comparative Study (2023)](https://arxiv.org/abs/2305.11073)
+21. [OpenVINO NNCF Wav2Vec2 Quantization](https://docs.openvino.ai/2024/notebooks/speech-recognition-quantization-wav2vec2-with-output.html)
+22. [KD + QAT for Transformer Encoders (EMNLP 2022)](https://arxiv.org/abs/2211.11014)
+
+## 한국어 ASR
+23. [KoSpeech: Korean ASR Toolkit](https://arxiv.org/abs/2009.03092)
+24. [K-Wav2vec 2.0: Korean Joint Decoding (INTERSPEECH 2022)](https://arxiv.org/abs/2110.05172)
+25. [Exploring Lexicon-Free Modeling Units for Korean (INTERSPEECH 2020)](https://arxiv.org/abs/1910.11590)
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
