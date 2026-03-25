@@ -3582,6 +3582,147 @@ model.encoder.left_context_size = 100  # 과거 1초
 
 ---
 
+# 123. Conformer의 Depthwise Conv: 왜 kernel=31이 최적인가
+
+Google의 원본 논문에서 **kernel size ablation:**
+
+| Kernel | WER (test-other) | 비고 |
+|--------|-----------------|------|
+| 7 | 7.0% | 0.07초 receptive field |
+| 15 | 6.8% | 0.15초 |
+| 17 | 6.8% | 0.17초 |
+| 23 | 6.7% | 0.23초 |
+| **31** | **6.7%** | **0.31초 (최적)** |
+| 32 | 6.9% | 짝수 → 비대칭 padding |
+| 65 | 7.1% | 과도한 smoothing |
+
+**31이 최적인 이유:**
+- 0.31초 ≈ **음소 1~2개의 길이** (한국어 음소 평균 0.1~0.2초)
+- 31 = 홀수 → 대칭 padding → 양쪽 context 균등
+- 31보다 크면 인접 음절까지 혼합 → 경계 흐릿 → 오히려 악화
+
+**양자화 관점:**
+- kernel=31: 인접 30개 프레임의 가중평균 → activation outlier 30배 희석
+- kernel=7: 6개 프레임만 → outlier 희석 부족
+- kernel=65: 64개 프레임 → 과도한 smoothing으로 정보 손실
+
+---
+
+# 124. NeMo .nemo 파일 구조
+
+SungBeom 모델 `.nemo` 파일 내부:
+
+```
+stt_kr_conformer_ctc_medium.nemo (491MB, ZIP 형식)
+├── model_config.yaml          # 모델 아키텍처 설정
+├── model_weights.ckpt         # PyTorch state_dict
+├── tokenizer.model            # SentencePiece BPE 모델
+├── vocab.txt                  # BPE vocab (순서 ≠ tokenizer ID!)
+└── hparams.yaml               # 학습 하이퍼파라미터
+```
+
+**주의:** `vocab.txt`의 줄 순서 ≠ SentencePiece tokenizer의 실제 ID 매핑. **반드시 `tokenizer.ids_to_tokens()`로 vocab_correct.json 추출** (이 프로젝트에서 겪은 함정).
+
+## ONNX export 방법
+
+```python
+import nemo.collections.asr as nemo_asr
+m = nemo_asr.models.EncDecCTCModelBPE.restore_from('model.nemo', map_location='cpu')
+m.eval()
+m.preprocessor.featurizer.dither = 0.0   # 필수!
+m.preprocessor.featurizer.pad_to = 0     # 필수!
+m.export('model.onnx')  # NeMo native ONNX export
+```
+
+NeMo export는 **opset 16, dynamic shape**으로 출력. 이후 static shape 고정 + onnxsim + Pad fix 필요.
+
+---
+
+# 125. Acuity가 Conformer의 Where op을 처리하는 방법
+
+Conformer ONNX에 **54개 Where op**이 있다. 이전에 수동 제거했다가 모델이 망가짐.
+
+## Where op의 역할
+
+```
+Where(condition, x, y) = condition ? x : y
+```
+
+Conformer에서 Where는 **attention mask** 구현:
+- `condition`: padding mask (padding 위치 True)
+- `x`: -10000.0 (매우 작은 값 → softmax 후 0)
+- `y`: attention score (실제 값)
+
+## Acuity의 자동 변환
+
+```
+ONNX Where op → Acuity SELECT + SWITCH op
+  SELECT: 조건에 따라 두 입력 중 하나 선택
+  SWITCH: 조건 분기
+```
+
+이 변환은 **uint8에서도 정상 동작** — SELECT는 단순 조건 선택이라 양자화 오차 없음.
+
+**교훈: ONNX의 Where op은 절대 수동 제거하지 마라. Acuity에게 맡겨라.**
+
+---
+
+# 126. T527 보드에서의 실제 사용 시나리오별 성능 예측
+
+## 126.1 스마트 스피커 (항상 대기)
+
+```
+VAD (Voice Activity Detection): CPU, ~1ms
+  → 음성 감지 시:
+NeMo mel 생성: CPU NEON, ~50ms
+NPU 추론 (3초 chunk): 233ms
+CTC + BPE decode: CPU, ~5ms
+총: ~289ms (음성 끝 → 텍스트)
+
+전력: ~1.5W (활성 시), ~0.1W (대기 시)
+```
+
+## 126.2 실시간 회의록 (연속 입력)
+
+```
+3초마다 NPU 추론 반복:
+0~3초:    chunk 1 → 233ms 추론 → "안녕하세요"
+2.5~5.5초: chunk 2 → 233ms 추론 → "오늘 회의 안건은"
+5~8초:    chunk 3 → 233ms 추론 → "첫 번째 ..."
+...
+```
+
+3초 chunk, 2.5초 stride → **0.5초 overlap** → 연속 텍스트 출력
+NPU 활용률: 233ms/3000ms = **7.8%** (대부분 idle)
+
+## 126.3 음성 명령 (단발 입력)
+
+```
+"에어컨 켜 줘" (1.5초)
+→ 3초 chunk에 zero-padding
+→ NPU 233ms
+→ "에어컨 켜 줘"
+→ NLU 처리 → 명령 실행
+총 latency: ~300ms (매우 빠름)
+```
+
+---
+
+# 127. 이 분석에서 사용하지 않은 기법들 (향후 참고)
+
+시간/자원 부족으로 시도 못 한 기법들:
+
+| 기법 | 설명 | 기대 효과 | 난이도 |
+|------|------|----------|--------|
+| **ESC calibration** | Evolution Strategy로 양자화 파라미터 최적화 | INT4까지 lossless | ★★★★ |
+| **Mixed-precision NB** | 레이어별 다른 precision (Acuity --hybrid) | 민감 레이어 보호 | ★★★ |
+| **Weight pruning** | 작은 weight 제거 → NB 크기 감소 | 50% 크기 축소 | ★★ |
+| **ONNX Runtime Mobile** | T527 CPU에서 ONNX Runtime | FP32 추론 (느리지만 정확) | ★★ |
+| **TFLite delegate** | TFLite + VIPLite delegate | 다른 양자화 경로 | ★★★ |
+| **Distillation** | 큰 Conformer → 작은 Conformer | 작은 NB, 비슷한 정확도 | ★★★★ |
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
