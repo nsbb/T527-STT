@@ -1751,6 +1751,85 @@ wav2vec2 한국어 (유화, 극도로 세밀):
 
 ---
 
+# 62. KoCitrinet과 Conformer의 공통점: CNN이 핵심
+
+T527에서 성공한 모델은 **KoCitrinet(CNN only)과 Conformer(CNN+Attention)**. 공통점:
+
+| 특성 | KoCitrinet | Conformer | wav2vec2 |
+|------|-----------|-----------|---------|
+| **Depthwise Separable Conv** | ✓ (핵심) | ✓ (핵심) | ✗ |
+| **Squeeze-and-Excitation (SE)** | ✓ | ✗ (일부 변형에 있음) | ✗ |
+| **mel spectrogram 입력** | ✓ | ✓ | ✗ (raw waveform) |
+| **CTC decoder** | ✓ | ✓ | ✓ |
+| **uint8 CER** | **44.44%** | **10.02%** | **100%** |
+
+**두 성공 모델의 공통 DNA: Depthwise Separable Convolution.**
+
+KoCitrinet은 CNN만으로 44.44%. Conformer는 여기에 Attention을 추가해 10.02%. **CNN이 양자화 안정성의 기반**, Attention이 정확도 향상.
+
+---
+
+# 63. Layer Normalization의 양자화 영향
+
+Conformer 90개, wav2vec2 26개의 LayerNorm op이 있다.
+
+**LayerNorm의 양자화 특성:**
+```
+LayerNorm(x) = (x - mean(x)) / sqrt(var(x) + eps) * gamma + beta
+```
+
+- `mean(x)`: 채널 평균 → uint8에서 정확히 계산 가능 (산술 평균)
+- `var(x)`: 분산 → **uint8에서 정밀도 손실** (제곱 연산 관련)
+- `sqrt(var)`: **uint8에서 근사 오류**
+- 전체: 정규화 → 값 범위를 `gamma * [-3, +3] + beta` 수준으로 리셋
+
+**양자화 관점에서 LayerNorm은 "양날의 검":**
+- 장점: activation range를 리셋하여 uint8 범위 내로 되돌림
+- 단점: 분산 계산의 uint8 오차가 정규화 결과를 왜곡
+
+Conformer에서 LayerNorm이 90개로 많은 건 **매 레이어마다 여러 위치에서 range를 리셋**하기 때문. 이것이 activation 폭발을 방지.
+
+---
+
+# 64. 양자화 친화적 Conformer 학습 팁
+
+기존 Conformer를 더 양자화에 유리하게 학습하려면:
+
+| 팁 | 효과 | 구현 |
+|---|---|---|
+| **Weight decay 높이기 (0.01~0.05)** | weight range 축소 → uint8 해상도 향상 | training config |
+| **Gradient clipping (max_norm=1.0)** | activation 급변 방지 | training config |
+| **Label smoothing 제거 (0.0)** | logit margin 최대화 | loss config |
+| **Dropout 제거 (추론 시)** | activation 안정화 | inference config |
+| **NeMo dither=0.0** | mel noise 제거 | preprocessor config |
+| **BPE vocab ~2048** | logit margin 확보 | tokenizer config |
+| **d_model ≥ 512** | 양자화 noise 흡수 용량 | model config |
+
+이 팁들은 **QAT 없이 PTQ만으로도** 양자화 품질을 높인다. SungBeom 모델이 PTQ만으로 CER 10.02%를 달성한 것도 이런 설정이 적절했기 때문으로 추정.
+
+---
+
+# 65. 이 프로젝트의 의의
+
+## 65.1 우리가 생산한 지식
+
+- **15개 모델, 100+ 양자화 실험**의 실측 데이터
+- **530개 레이어 FP32 vs uint8 dump** 분석
+- **Acuity 시뮬레이션 ≠ T527 디바이스** (31.5% 일치) 발견
+- **아키텍처 > vocab > 데이터 > 알고리즘** 우선순위 도출
+- **Conformer CTC + uint8 PTQ** = T527 한국어 STT의 답
+
+## 65.2 틀린 것에서 배운 것
+
+- **Vocab 분석 오류**: vocab 56 권고 → Conformer(2049)가 반증
+- **시뮬레이션 신뢰**: NB_agree 70.8%에 만족 → 디바이스 CER 174%
+- **QAT 과신**: margin 3배 개선에 만족 → 여전히 step 미달
+- **Split 기대**: lm_head fp32로 해결 기대 → encoder가 근본 원인
+
+**틀리는 것은 피할 수 없다. 핵심은 틀림을 인정하고 방향을 바꾸는 속도.**
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
