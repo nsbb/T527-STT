@@ -4073,7 +4073,84 @@ Docker 이미지:
 
 ---
 
+# 144. T527 NPU Driver 버전과 호환성
+
+| NPU SW Version | 드라이버 | 라이브러리 | 호환 NB |
+|----------------|---------|-----------|--------|
+| **v1.13** | VIPLite | libVIPlite.so + libVIPuser.so | 현재 NB |
+| v2.0 | NBGlinker | libNBGlinker.so + libVIPhal.so | **비호환** (재변환 필요) |
+
+T527은 **v1.13**. `machinfo/T527/config.mk`의 `NPU_SW_VERSION`으로 결정.
+
+**주의:** NB를 다른 T527 보드에 배포할 때, NPU 드라이버 버전이 같은지 확인. v1.13 NB를 v2.0 드라이버에서 실행하면 실패.
+
+---
+
+# 145. Conformer의 SpecAugment와 양자화
+
+NeMo Conformer는 학습 시 **SpecAugment** 적용:
+- **Time masking**: 랜덤 시간 구간을 0으로 마스크
+- **Frequency masking**: 랜덤 주파수 대역을 0으로 마스크
+
+**양자화 관점에서 SpecAugment의 부수 효과:**
+- 학습 시 일부 입력이 0 → 모델이 **불완전한 정보에서도 예측**하도록 학습
+- **uint8 양자화 = 정보 손실** → SpecAugment로 학습한 모델은 정보 손실에 이미 내성
+- 이것이 Conformer가 uint8에서도 잘 동작하는 **숨은 요인**일 수 있음
+
+---
+
+# 146. 이 문서의 검색 키워드 (SEO)
+
+이 문서를 찾을 수 있는 키워드:
+
+```
+T527 NPU STT 양자화
+Conformer CTC uint8 edge deployment
+wav2vec2 quantization failure
+Vivante VIP9000 speech recognition
+Allwinner T527 AI NPU
+한국어 음성인식 on-device
+Acuity Toolkit INT8 ASR
+CER 10% edge NPU
+Conformer vs Transformer quantization
+depthwise convolution quantization robustness
+```
+
+---
+
+# 147. 이 문서의 최종 업데이트 기록
+
+| 날짜 | 줄 수 | 섹션 | 주요 추가 |
+|------|------|------|----------|
+| 2026-03-25 17:08 | 415 | 17 | 초안 |
+| 2026-03-25 18:00 | 822 | 28 | 7가지 요인 + 체크리스트 |
+| 2026-03-25 19:00 | 1160 | 39 | 차세대 모델 + 비교 분석 |
+| 2026-03-25 20:00 | 1676 | 58 | 내부 설계 + GELU vs Swish |
+| 2026-03-25 21:00 | 2362 | 80 | 가이드 + 체크리스트 |
+| 2026-03-25 22:00 | 2764 | 95 | 결론 + 비용 분석 |
+| 2026-03-25 23:00 | 3195 | 106 | 재현 명령어 + 읽기 가이드 |
+| 2026-03-26 00:00 | 3593 | 122 | Streaming + 통계 |
+| 2026-03-26 01:00 | 3949 | 137 | 설계 원칙 7가지 |
+| **2026-03-26 현재** | **4200+** | **147** | **최종** |
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
+
+이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
+
+- Conformer vocab 2049가 T527 uint8에서 CER 10.02% 달성
+- KoCitrinet vocab 2048도 CER 44.44%로 동작
+- **vocab 크기가 아니라 모델 아키텍처가 핵심**
+
+aihub 학습은 **음절 vocab (~1900~2000)으로 진행해도 된다.** 단, 모델 아키텍처를 **wav2vec2에서 Conformer CTC로 변경**해야 한다.
+
+---
+
+**— 문서 끝 —**
+
+*이 문서는 T527 NPU STT 프로젝트의 4주간 실험을 종합한 것이며, 새로운 실험이 진행될 때마다 업데이트되어야 합니다.*
+
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
 
