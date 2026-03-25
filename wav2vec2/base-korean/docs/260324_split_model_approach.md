@@ -430,10 +430,62 @@ T527 디바이스에서 Transformer 4레이어(L8-11) + lm_head를 naive C matmu
 | CPU ONNX Runtime (예상) | 4~40초 | NEON SIMD 최적화 시 |
 
 → L8-11을 CPU에서 돌리면 naive 기준 **6.5분**, 최적화해도 **수 초** — 실시간 사용 불가.
+
+### 4.5 aihub 80k 모델 (vocab 1912 음절) Split 실험 (2026-03-25)
+
+**모델:** 다른 세션에서 aihub 데이터로 학습, 80000 step, vocab 1912 (음절 단위)
+**FP32 성능:** CER 9~18% (테스트셋별, eval_results 확인)
+**위치:** `ai-sdk/models/w2v_v.1.0.0_onnx/wav2vec2_base_korean/`
+
+이 모델은 기존 base-korean (vocab 56)보다 FP32 성능이 훨씬 좋다. Split으로 개선 가능한지 테스트.
+
+**Full uint8 (기존 NB, lm_head 포함):**
+
+| CER (3s trunc) | CER (full GT) | 비고 |
+|---|---|---|
+| 92.83% | 98.21% | 출력 거의 blank (non-blank 0~4개/149) |
+
+**Split (encoder NPU uint8 + lm_head CPU fp32):**
+
+| CER (3s trunc) | NPU 시간 | 비고 |
+|---|---|---|
+| **92.65%** | ~425ms | **full uint8 (92.83%)과 동일 — 개선 없음** |
+
+**출력 예시:**
+
+| # | Split 출력 | GT | CER |
+|---|---|---|---|
+| 3 | 그고 | 그리고 이 나무는 태즈메이 | 81.8% |
+| 6 | 야고 여이 | 야권은 여당에서 분명한 | 80.0% |
+| 17 | 플이장에 | 애플 입장에선 이천 십 이 | 70.0% |
+| 11 | 하만 | 하지만 싫증 나면 버리면 그만 | 83.3% |
+
+→ 음절 1~2개 나오지만 CER 개선 없음. encoder hidden states가 이미 손상.
+
+**결론:**
+- **FP32에서 CER 9~18%인 좋은 모델도 encoder uint8에서 깨짐**
+- vocab 크기(1912 vs 56)와 무관하게 encoder uint8 양자화가 문제
+- 좋은 FP32 성능이 uint8 양자화 성공을 보장하지 않음
+- Split(lm_head fp32)으로도 encoder 손상은 복구 불가
 | QAT + margin loss | — | 진행 중 | margin 0.099 (개선 중) |
 | fine-tune (attempt5) | — | WER 40.6% | 유일한 성공 |
 
-**Split model 최종 결론:** 한국어 base-korean 모델은 어디서 잘라도 uint8 양자화가 안 됨. L0-7조차 한국어 activation 분포에서는 uint8 정보 손실이 치명적. **모델 weight 자체를 바꿔야 함** (fine-tune, QAT).
+**Split model 최종 결론 (2026-03-25 업데이트):**
+- 한국어 모델은 **어떤 split으로도, 어떤 모델로도** uint8 양자화가 안 됨
+- base-korean (vocab 56, FP32 CER 33%) → Split CER 99.70%
+- **aihub 80k (vocab 1912, FP32 CER 9~18%)** → Split CER **92.65%** (FP32 성능 좋아도 무관)
+- 문제는 vocab, FP32 성능, split 지점이 아니라 **encoder weight의 activation 분포가 uint8 부적합**
+- 유일한 해결: 영어 pretrained encoder (uint8 friendly) → 한국어 fine-tune + QAT
+
+| 모델 | 방식 | FP32 CER | uint8 CER | Split CER |
+|------|------|---------|-----------|-----------|
+| 영어 base-960h (vocab 32) | Full uint8 | 9.74% | **17.52%** | 20.68% |
+| 한국어 base-korean (vocab 56) | Full uint8 | 30.22% | 100.86% | 99.70% |
+| 한국어 base-korean (vocab 56) | Split L7 | — | — | 99.26% |
+| 한국어 base-korean (vocab 56) | CNN+lm fp32 | — | — | 100.00% |
+| **한국어 80k (vocab 1912)** | **Full uint8** | **9~18%** | **92.83%** | — |
+| **한국어 80k (vocab 1912)** | **Split lm fp32** | — | — | **92.65%** |
+| 한국어 fine-tune (attempt5) | Full uint8 | WER 40.6% | 부분 성공 | — |
 
 ---
 
