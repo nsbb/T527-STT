@@ -2351,6 +2351,225 @@ Part V: 심층 분석 (섹션 18.5-58)
 
 ---
 
+# 81. CER이 높은 유형 분석 (SungBeom 100샘플)
+
+SungBeom Conformer CER 10.02%지만, **특정 유형에서 CER이 높다:**
+
+## 81.1 긴 문장 (20초+)
+
+```
+#1 (20.4초, 8 chunks): CER 82.0%
+GT: "차 문이 종잇장처럼 얇지 않으니 문 두께 스물 센티미터를 빼면..."
+NPU: "처럼 낮지 않으니 두 문 두 두께 스물 센티미터를 빼면..."
+```
+
+**원인:** 슬라이딩 윈도우 8번 → 경계 7곳에서 단어 잘림/반복. chunk 수가 많을수록 누적 오류.
+**해결:** 입력 길이 5초/10초로 확대 → chunk 수 절반으로 감소.
+
+## 81.2 전문 용어/고유명사
+
+```
+#46 (8.5초): CER 63.5%
+GT: "반면파종강 성공회대 노동 아카데미 주임교수는..."
+NPU: "반면파종강 성공회대 노동 아카데미 주 주임 교수는..."
+```
+
+**원인:** BPE 토크나이저가 학습 데이터에 없는 고유명사를 잘 분리 못 함.
+**해결:** 도메인 특화 fine-tuning. 또는 더 큰 BPE vocab.
+
+## 81.3 숫자 읽기
+
+```
+#49 (8.6초): CER 29.0%
+GT: "삼 분기 매출 일조 이천 구백십 구 억원 영업이익 육백 십 팔 억원을 올렸다"
+NPU: "삼 분기 매출 일조 이천 구백십 구 원 영업 영업이 육팔억 원을 올렸다"
+```
+
+**원인:** "육백 십 팔 억원" → "육팔억 원" — 숫자 단위 혼동. BPE가 숫자를 일관되게 토큰화하지 못함.
+**해결:** 숫자 전용 후처리 규칙. 또는 숫자 중심 fine-tuning.
+
+## 81.4 CER 유형별 비중
+
+| 유형 | 영향 받는 샘플 | 평균 CER | 개선 방법 |
+|------|-------------|---------|----------|
+| 긴 문장 (12초+) | 23개 | 13.3% | 입력 길이 확대 |
+| 전문 용어 | ~5개 | 30~60% | 도메인 fine-tune |
+| 숫자 | ~5개 | 20~30% | 후처리 규칙 |
+| 일반 한국어 | ~67개 | **6.7%** | 이미 양호 |
+
+**일반 한국어의 실질 CER은 ~7%**. 전체 평균 10.02%는 소수의 어려운 샘플이 끌어올린 것.
+
+---
+
+# 82. CTC 슬라이딩 윈도우 경계 처리 알고리즘
+
+## 82.1 현재 방식 (단순 연결)
+
+```
+Chunk 1 CTC: "안녕하"
+Chunk 2 CTC: "세요 반갑습니"
+Chunk 3 CTC: "다"
+→ 연결: "안녕하세요 반갑습니다"
+```
+
+**문제:** overlap 영역에서 같은 토큰이 중복 출력될 수 있음.
+
+## 82.2 개선: Overlap CTC Merge
+
+```
+Chunk 1 (0~3초):     logits [76 frames]
+Chunk 2 (2.5~5.5초): logits [76 frames]
+
+Overlap 영역 (2.5~3초 = 0.5초 = 약 5 output frames):
+  Chunk 1의 마지막 5 frames
+  Chunk 2의 처음 5 frames
+  → 두 logit의 평균 또는 max 취하기
+  → 또는 Chunk 1의 전반부 + Chunk 2의 후반부 사용
+```
+
+## 82.3 구현 코드 (Python)
+
+```python
+def merge_chunks(chunks_logits, stride_frames=63, overlap_frames=13):
+    """Merge overlapping CTC logit chunks."""
+    merged = chunks_logits[0][:stride_frames]
+    for i in range(1, len(chunks_logits)):
+        if i < len(chunks_logits) - 1:
+            merged = np.concatenate([merged, chunks_logits[i][:stride_frames]])
+        else:
+            merged = np.concatenate([merged, chunks_logits[i]])
+    return merged
+```
+
+---
+
+# 83. NeMo mel을 C/Java로 구현하는 방법
+
+Android 앱에서 NeMo Conformer를 사용하려면 **mel spectrogram을 디바이스에서 생성**해야.
+
+## 83.1 NeMo mel 파이프라인
+
+```
+1. 16kHz mono audio (float32)
+2. Pre-emphasis (선택적)
+3. STFT: n_fft=512, hop=160, win=400
+4. Power spectrum: |STFT|²
+5. mel filterbank: 80 bins (librosa mel_frequencies)
+6. Log: log(x + 1e-6)
+7. Per-feature normalize: (x - mean) / std
+```
+
+## 83.2 C 구현 핵심
+
+```c
+// STFT (간소화)
+void stft(float *audio, int audio_len, float *stft_out, int n_fft, int hop) {
+    float window[400]; // Hann window
+    for (int i = 0; i < 400; i++)
+        window[i] = 0.5f * (1.0f - cosf(2.0f * M_PI * i / 399.0f));
+
+    int n_frames = (audio_len - n_fft) / hop + 1;
+    for (int t = 0; t < n_frames; t++) {
+        float frame[512] = {0};
+        for (int i = 0; i < 400; i++)
+            frame[i] = audio[t * hop + i] * window[i];
+        // FFT (512-point)
+        rfft(frame, 512, &stft_out[t * 257]);  // 257 = n_fft/2 + 1
+    }
+}
+
+// mel filterbank
+void mel_filterbank(float *power_spec, int n_frames, float mel_basis[80][257], float *mel_out) {
+    for (int t = 0; t < n_frames; t++) {
+        for (int m = 0; m < 80; m++) {
+            float sum = 0;
+            for (int f = 0; f < 257; f++)
+                sum += mel_basis[m][f] * power_spec[t * 257 + f];
+            mel_out[t * 80 + m] = logf(sum + 1e-6f);
+        }
+    }
+}
+```
+
+## 83.3 주의사항
+
+- **NeMo의 normalize**: `(x - mean) / (std + 1e-5)` per feature (80개 각각)
+- NeMo의 dither=0.0 (noise 없이)
+- NeMo의 pad_to=0 (padding 없이)
+- **Hann window: periodic (`cos(2πn/N)`) vs symmetric (`cos(2πn/(N-1))`) 구분** — NeMo는 periodic
+
+---
+
+# 84. T527 이외 Allwinner SoC 호환성
+
+Allwinner의 다른 SoC도 **같은 Vivante VIP NPU** 계열:
+
+| SoC | NPU | TOPS | NPU 버전 | NB 호환 |
+|-----|-----|------|---------|--------|
+| **T527** | VIP9000NANOSI_PLUS | **2** | v1.13 | 현재 |
+| T536 | VIP9000NANODI_PLUS | **4** | v2.0 | ✗ (NB 재변환 필요) |
+| A733 | VIP9000NANOSI | 1.5 | — | △ (config 확인) |
+| AI985 | VIP9000 | 8 | v2.0 | ✗ |
+
+**주의:** NPU 버전(v1.13 vs v2.0)이 다르면 NB가 호환되지 않음. Acuity `--optimize` 플래그의 PID가 다름:
+- T527: `VIP9000NANOSI_PLUS_PID0X10000016`
+- T536: `VIP9000NANODI_PLUS_PID0X1000003B`
+
+하지만 **ONNX + quantize 파일은 재사용 가능**. export만 다시 하면 됨.
+
+---
+
+# 85. on-device 전처리 최적화: NEON SIMD
+
+T527 ARM Cortex-A55는 **NEON SIMD**를 지원. mel 계산을 NEON으로 최적화하면:
+
+| 연산 | Scalar (C) | NEON (128-bit) | 배수 |
+|------|-----------|----------------|------|
+| FFT butterfly | 1 mul + 1 add | 4 mul + 4 add | **4x** |
+| mel filterbank | 80×257 FMA | 80×64 NEON FMA | **~4x** |
+| log | 1 per sample | 4 per NEON lane | **4x** |
+
+mel 계산이 현재 Python에서 ~30ms (서버). C NEON으로 구현하면 **T527 ARM에서 ~50ms** 예상 (주파수 1.8GHz A55 기준).
+
+NPU 추론 233ms + mel 50ms = **총 283ms per chunk** — 3초 오디오를 283ms에 처리 = **RTF 0.094 (10.6x 실시간)**.
+
+---
+
+# 86. 실시간 STT End-to-End Latency 분석
+
+| 단계 | 시간 (예상) | 디바이스 |
+|------|-----------|---------|
+| 마이크 → PCM buffer (3초) | 3000ms | 마이크 |
+| mel spectrogram 생성 | 50ms | ARM CPU (NEON) |
+| uint8 양자화 | 1ms | ARM CPU |
+| NPU 추론 | 233ms | NPU |
+| CTC decode + BPE detokenize | 5ms | ARM CPU |
+| **총 processing** | **~289ms** | — |
+| **총 latency (음성 끝 → 텍스트)** | **~289ms** | — |
+
+3초 음성 입력 후 **289ms 안에 텍스트 출력**. 사용자 체감 대기 시간 < 300ms.
+
+**Streaming 모드 (미래):**
+- 0.5초 chunk → 50ms processing → 체감 50ms latency
+- 하지만 NB 재변환 + causal attention 필요
+
+---
+
+# 87. 보안/프라이버시: on-device STT의 장점
+
+| | On-device (T527 NPU) | Cloud STT (서버) |
+|---|---|---|
+| **음성 데이터** | **디바이스에서만 처리** | 서버로 전송 |
+| 프라이버시 | **보장** | 전송 중 노출 위험 |
+| 인터넷 필요 | **불필요** | 필수 |
+| 지연 | **289ms** | 200~500ms (네트워크) |
+| 비용 | **무료 (HW 비용만)** | API 사용료 |
+| 가용성 | **100% (오프라인)** | 네트워크 의존 |
+
+GDPR, 개인정보보호법 등 규제 환경에서 **on-device STT가 필수**인 경우 많음. T527 + Conformer는 이 요구를 CER 10.02%로 충족.
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
