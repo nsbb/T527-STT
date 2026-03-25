@@ -1436,6 +1436,42 @@ NVIDIA가 한국어 Conformer CTC 모델을 **NGC에 공식 배포**. ~120M para
 
 ---
 
+# 52. ONNX Op 유형 분포 비교: Conformer vs wav2vec2
+
+Acuity import 후 json에서 추출한 **내부 operator 분포** (실측):
+
+| Op | **Conformer** | **wav2vec2** | 의미 |
+|---|---|---|---|
+| **depthwise_conv1d** | **18** | **0** | **Conformer만의 핵심 — 매 레이어에 Conv** |
+| conv1d | 37 | 7 | Conformer CNN 비중 5배 |
+| **gelu** | **0** | **20** | **wav2vec2만 GELU 사용 (양자화 불안정)** |
+| **swish** | **54** | **0** | **Conformer는 Swish 사용 (GELU보다 양자화 안정)** |
+| softmax | 18 | 12 | 비슷 |
+| layernormalize | 90 | 26 | Conformer 3.5배 |
+| matmul | 54 | 24 | Conformer 2.3배 |
+| where | 54 | 0 | Conformer에 있지만 Acuity가 SELECT로 변환 |
+| **TOTAL** | **1410** | **527** | Conformer가 2.7배 많은 op |
+
+## 핵심 차이점
+
+1. **depthwise_conv1d**: Conformer 18개 (매 레이어), wav2vec2 0개 → **이것이 양자화 안정성의 핵심**
+2. **GELU vs Swish**: wav2vec2는 GELU(Erf 기반, 비선형 급변) 사용, Conformer는 Swish(sigmoid 기반, 부드러움) → **Swish가 uint8에서 더 안정적**
+3. **op 수**: Conformer가 2.7배 많지만 성공. **op 수보다 op 유형이 중요**
+
+## GELU vs Swish의 양자화 차이
+
+```
+GELU(x) = x × Φ(x) = x × 0.5 × (1 + erf(x/√2))
+  → erf 함수가 x=0 근처에서 급변 → uint8에서 근사 부정확
+
+Swish(x) = x × sigmoid(βx)
+  → sigmoid는 [0,1] 범위에서 부드럽게 변화 → uint8에서 안정적 근사
+```
+
+이것이 **같은 attention + FFN 구조에서 Conformer가 더 양자화에 강건한 이유 중 하나**.
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
