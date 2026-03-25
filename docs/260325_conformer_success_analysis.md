@@ -1149,6 +1149,94 @@ NeMo의 기본 Conformer 변형:
 
 ---
 
+# 40. CTC vs RNN-Transducer: 양자화 관점
+
+## 40.1 왜 CTC 모델이 양자화에 유리한가
+
+| | CTC | RNN-Transducer |
+|---|---|---|
+| 디코딩 | **독립적** (각 프레임 개별) | **순차적** (이전 출력에 의존) |
+| 양자화 오류 전파 | **해당 프레임에만 영향** | **다음 프레임으로 누적** |
+| 모델 구조 | Encoder only | Encoder + Decoder + Joiner |
+| NB 수 | 1개 | 3개 (순차 실행) |
+| T527 결과 | **Conformer CTC: CER 10.02%** | Zipformer RNN-T: CER 100% |
+
+**CTC의 핵심 장점:** 각 프레임의 양자화 오류가 **다른 프레임에 전파되지 않음**. RNN-T는 decoder의 자기회귀(autoregressive) 특성 때문에 **한 프레임의 오류가 다음 프레임에 연쇄적으로 영향**.
+
+Zipformer(RNN-T)가 실패하고 Conformer(CTC)가 성공한 이유 중 하나.
+
+---
+
+# 41. NeMo mel vs librosa mel 상세 차이
+
+Conformer 변환 시 겪은 **mel spectrogram 불일치 문제**:
+
+```
+NeMo mel:    range [-1.75, 5.14], mean=0.0000
+librosa mel: range [-2.24, 4.89], mean=-0.0048
+```
+
+| 파라미터 | NeMo | librosa | 영향 |
+|---------|------|---------|------|
+| dither | **0.0 (추론 시)** | 없음 | NeMo 기본값 1e-5는 noise 추가 |
+| pad_to | **0 (추론 시)** | 없음 | NeMo 기본값은 padding 추가 |
+| window | hann (periodic) | hann | 미세 차이 |
+| normalization | per-feature | — | 값 범위 차이 |
+
+**결론:** Conformer(NeMo) 모델은 반드시 **NeMo preprocessor로 mel 생성**해야 함. librosa로 만들면 calibration 불일치로 양자화 품질 저하. Android 앱 구현 시에도 NeMo 방식으로 mel 생성 필요.
+
+---
+
+# 42. 슬라이딩 윈도우 최적화
+
+SungBeom Conformer는 3초(301 frames) 고정 입력. 긴 오디오는 슬라이딩 윈도우로 처리.
+
+## 42.1 현재 설정
+
+```
+Window: 301 frames (≈3.01초)
+Stride: 250 frames (≈2.50초)
+Overlap: 51 frames (≈0.51초)
+```
+
+## 42.2 문제점
+
+1. **윈도우 경계에서 단어 잘림** — "안녕하세요"가 "안녕하" + "세요"로 분리
+2. **중복 출력** — overlap 영역에서 같은 토큰 2번 출력
+3. **긴 문장 CER 증가** — 20초 문장(8 chunks): CER 82%
+
+## 42.3 개선 방안
+
+| 방법 | 효과 | 구현 난이도 |
+|------|------|-----------|
+| **입력 길이 확대 (5초, 10초)** | chunk 수 감소 → 경계 오류 감소 | NB 재변환 필요 |
+| Overlap 증가 (100 frames) | 더 안전한 경계 | 속도 느려짐 |
+| Overlap 영역 CTC merge | 중복 제거 | 알고리즘 구현 |
+| LM rescoring | 경계 오류 교정 | 추가 모델 필요 |
+
+**가장 실용적:** 입력 길이를 **5초(501 frames)**로 확대. NB 크기 약간 증가하지만 chunk 수 절반 → CER 개선 예상.
+
+---
+
+# 43. 전체 프로젝트 투자 비용 분석
+
+| 작업 | 기간 | GPU 시간 | 결과 | ROI |
+|------|------|---------|------|-----|
+| **wav2vec2 PTQ 탐색** | **~2주** | 0h (PTQ) | 실패 | ✗ |
+| wav2vec2 레이어 분석 | ~3일 | 0h | 인사이트 | △ |
+| wav2vec2 QAT | ~2일 | ~10h (RTX 4070) | margin 3배 개선 | △ |
+| wav2vec2 fine-tune (attempt 1~7) | ~5일 | ~20h | WER 40.6% | △ |
+| Split model 6종 | ~2일 | 0h | 전부 실패 | ✗ |
+| Vocab 분석 + 문서 | ~2일 | 0h | **틀린 결론** | ✗✗ |
+| **Conformer 변환** | **~1일** | **0h** | **CER 10.02%** | **⭐⭐⭐** |
+| KoCitrinet 버그 수정 | ~2일 | 0h | CER 44.44% | ⭐⭐ |
+| Zipformer 양자화 | ~3일 | 0h | 전부 실패 | ✗ |
+
+**총 투자: ~4주, GPU ~30시간**
+**최적 경로 (사후적으로):** KoCitrinet 버그 수정(2일) → Conformer 변환(1일) = **3일이면 CER 10.02% 달성 가능했음**
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
