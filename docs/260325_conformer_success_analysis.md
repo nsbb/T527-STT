@@ -3097,6 +3097,93 @@ NB 파일과 함께 생성되는 **양자화 메타데이터:**
 
 ---
 
+# 105. 모든 성공 모델의 NB 변환 재현 명령어
+
+## SungBeom Conformer (CER 10.02%)
+
+```bash
+# 1. NeMo Docker: ONNX export
+docker run --rm --gpus all -v $WORK:/workspace nvcr.io/nvidia/nemo:23.06 python3 -c "
+import nemo.collections.asr as nemo_asr
+m = nemo_asr.models.EncDecCTCModelBPE.restore_from('model.nemo', map_location='cpu')
+m.eval()
+m.preprocessor.featurizer.dither = 0.0
+m.preprocessor.featurizer.pad_to = 0
+m.export('model.onnx')
+"
+
+# 2. WSL: static shape + onnxsim + Pad fix
+python3 fix_onnx.py  # [1,80,301] 고정, Pad constant_value=0.0
+
+# 3. Acuity Docker: NB 변환
+docker run --rm -v $WORK:/workspace -v $ACUITY612:/acuity:ro -v $VIV:/viv:ro t527-npu:v1.2 bash -c '
+cd /acuity/bin
+export REAL_GCC=/usr/bin/gcc VSIM=/viv/cmdtools/vsimulator
+export LD_LIBRARY_PATH=$VSIM/lib:$VSIM/../common/lib:$VSIM/lib/x64_linux:$VSIM/lib/x64_linux/vsim
+./pegasus import onnx --model /workspace/model_acuity.onnx --output-model sb.json --output-data sb.data
+./pegasus quantize --model sb.json --model-data sb.data --device CPU \
+  --with-input-meta /workspace/inputmeta.yml --rebuild-all \
+  --model-quantize sb_uint8.quantize --quantizer asymmetric_affine --qtype uint8 \
+  --algorithm kl_divergence
+./pegasus export ovxlib --model sb.json --model-data sb.data \
+  --dtype quantized --model-quantize sb_uint8.quantize \
+  --with-input-meta /workspace/inputmeta.yml --pack-nbg-unify \
+  --optimize VIP9000NANOSI_PLUS_PID0X10000016 --viv-sdk $VSIM \
+  --target-ide-project linux64 --batch-size 1 --output-path /workspace/wksp/
+'
+# → network_binary.nb (102MB)
+```
+
+## KoCitrinet (CER 44.44%)
+
+```bash
+# 이미 변환 완료. 경로:
+# ai-sdk/models/ko_citrinet_ngc/v2_nb_fixlen/android_app_handoff/network_binary.nb
+```
+
+## Wav2Vec2 EN (CER 17.52%)
+
+```bash
+# 이미 변환 완료. 경로:
+# ai-sdk/models/w2v_v.1.0.0_onnx/wav2vec2_base_960h_5s/wksp/
+#   wav2vec2_base_960h_5s_uint8_fixed_nbg_unify/network_binary.nb
+# 핵심: reverse_channel=false, 51 calibration, moving_average
+```
+
+---
+
+# 106. 이 문서를 읽는 사람에게
+
+**당신이 이 프로젝트에 새로 합류했다면:**
+
+1. **섹션 1-3** 읽기 — 결론과 배경 이해 (5분)
+2. **섹션 21** 읽기 — 한 페이지 요약 (1분)
+3. **섹션 91** 읽기 — 의사결정 트리 (2분)
+4. **섹션 28** 읽기 — 양자화 사전 판단 체크리스트 (3분)
+
+**당신이 새 모델을 시도하려 한다면:**
+
+1. **섹션 28** 체크리스트로 사전 판단
+2. **섹션 14** 모델 선택 가이드라인
+3. **섹션 73** Acuity 치트시트
+4. **섹션 101** Production 체크리스트
+
+**당신이 왜 wav2vec2가 안 되는지 알고 싶다면:**
+
+1. **섹션 4** 아키텍처 차이 (핵심)
+2. **섹션 8** Activation 분포 실측
+3. **섹션 19** 영어 vs 한국어 차이
+4. **섹션 23** 실패 카탈로그 (21종+ PTQ)
+
+**당신이 윗사람에게 보고해야 한다면:**
+
+1. **섹션 1** Executive Summary
+2. **섹션 2** 스코어보드
+3. **섹션 17** 최종 권고
+4. **섹션 99** 제품 적용 시나리오
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
