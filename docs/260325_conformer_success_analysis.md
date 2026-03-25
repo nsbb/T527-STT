@@ -3441,6 +3441,70 @@ Docker 빌드 시간:  ~5시간
 
 ---
 
+# 117. Conformer CTC vs Conformer RNN-T: 양자화 관점
+
+NeMo에서 Conformer는 **CTC**와 **RNN-T** 두 가지 디코더로 사용 가능.
+
+| | Conformer **CTC** | Conformer **RNN-T** |
+|---|---|---|
+| 디코더 | 없음 (linear projection만) | LSTM decoder + joiner |
+| 모델 수 | **1개 NB** | **3개 NB** (encoder + decoder + joiner) |
+| 추론 방식 | **병렬** (모든 프레임 독립) | **순차** (autoregressive) |
+| 양자화 오류 전파 | **없음** | 있음 (decoder → joiner → 다음 step) |
+| T527 적합성 | **최적** | 위험 (Zipformer RNN-T 실패) |
+| 정확도 (FP32) | 약간 낮음 | 약간 높음 |
+| 추론 속도 | **빠름** (single pass) | 느림 (multiple passes) |
+
+**T527에서는 Conformer CTC가 정답.** RNN-T는:
+1. 3개 NB 순차 실행 → 복잡
+2. Autoregressive → 양자화 오류 누적
+3. Zipformer RNN-T가 CER 100%로 실패한 전례
+
+---
+
+# 118. 한국어 STT 시장의 on-device 수요
+
+## 현재 한국어 STT 시장
+
+| 제공자 | 방식 | 지연 | 비용 | 프라이버시 |
+|--------|------|------|------|-----------|
+| NAVER Clova | Cloud API | 200~500ms | 월 과금 | 서버 전송 |
+| KT AI | Cloud API | 200~500ms | 월 과금 | 서버 전송 |
+| Google STT | Cloud API | 150~400ms | 건당 과금 | 서버 전송 |
+| **T527 Conformer** | **on-device** | **289ms** | **무료 (HW비용만)** | **로컬 처리** |
+
+## on-device 수요 증가 요인
+
+1. **프라이버시 규제** (GDPR, 한국 개인정보보호법) → 음성 서버 전송 제한
+2. **인터넷 불안정 환경** (공장, 지하, 이동체) → 오프라인 필수
+3. **API 비용 절감** → 대량 디바이스에 STT 탑재 시 Cloud API 비용 폭발
+4. **실시간성** → Cloud 왕복 vs on-device 직접 처리
+
+**T527 + Conformer CER 10.02%는 상용 수준.** NAVER/Google Cloud STT와 비교할 수준은 아니지만 (Cloud는 CER 3~5%), on-device로서는 최고 수준.
+
+---
+
+# 119. 이 프로젝트가 업계에 기여할 수 있는 것
+
+1. **Vivante VIP9000 NPU에서 Conformer CTC uint8 동작 최초 실증** — 공개된 사례 없음
+2. **wav2vec2 vs Conformer 양자화 비교 실측 데이터** — 530개 레이어 분석
+3. **Acuity 시뮬레이션 ≠ 디바이스 불일치 발견** (31.5% 일치) — VeriSilicon에 보고 가치
+4. **T527 NPU의 실제 양자화 제약 문서화** — 공식 문서에 없는 내용
+5. **on-device 한국어 STT CER 10.02%** — edge NPU에서의 최신 벤치마크
+
+---
+
+# 120. 감사의 글
+
+이 프로젝트는 많은 시행착오를 거쳤다. 특히:
+
+- **vocab 분석 오류**를 지적해준 Conformer 실험 결과에 감사
+- **reverse_channel 버그**를 찾는 데 도움을 준 Acuity 문서
+- **SungBeom 모델**을 공개해준 HuggingFace 커뮤니티
+- **NeMo 프레임워크**를 제공한 NVIDIA
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
