@@ -2924,6 +2924,179 @@ String text = sb.toString().replace("▁", " ").trim();
 
 ---
 
+# 101. Production 배포 체크리스트
+
+SungBeom Conformer를 제품에 탑재하기 전 확인:
+
+## 필수
+
+- [ ] NB 파일 (102MB) → 디바이스 storage 확인
+- [ ] `vocab_correct.json` (2049 토큰) → 앱 assets
+- [ ] NeMo mel 전처리 → 앱 내 C/Java 구현 완료
+- [ ] CTC greedy decode → 앱 내 구현 완료
+- [ ] BPE detokenize → vocab_correct.json 기반 구현 완료
+- [ ] 슬라이딩 윈도우 (301f window, 250f stride) → 구현 완료
+- [ ] NPU 추론 API (awnn 또는 VIPLite) → JNI 연동 완료
+- [ ] 16kHz mono 오디오 캡처 → Android AudioRecord 구현
+- [ ] 디바이스 CER 실측 → 대상 도메인에서 테스트
+
+## 권장
+
+- [ ] 5초 입력 NB 변환 → 슬라이딩 윈도우 오버헤드 감소
+- [ ] NEON SIMD mel 최적화 → 전처리 시간 단축
+- [ ] 후처리 (공백 정규화, 구두점 제거) → 출력 품질 향상
+- [ ] 에러 핸들링 (NPU 초기화 실패, 메모리 부족 등)
+- [ ] 배터리 소비 테스트 → 장시간 사용 시 전력 확인
+- [ ] 노이즈 환경 테스트 → 실제 환경 CER 확인
+
+## 주의
+
+- [ ] **dither=0.0** (NeMo 기본값 1e-5는 noise 추가 → CER 악화)
+- [ ] **pad_to=0** (NeMo 기본값은 패딩 추가 → mel 길이 불일치)
+- [ ] NB input scale/zp 확인 (0.02418/67) → 양자화 코드와 일치
+- [ ] NB output scale/zp 확인 (0.20301/255) → dequantize 코드와 일치
+
+---
+
+# 102. FP32 vs uint8 출력 실제 비교
+
+같은 오디오에 대한 **FP32(서버)와 uint8(T527 NPU) 출력 비교:**
+
+## 예시 1: CER 0% (완벽 일치)
+
+```
+GT:   "하지만 싫증 나면 버리면 그만이라는 식의 사고방식은 단지 물건에만 영향을 미치는 데서 그치지 않습니다"
+FP32: "하지만 싫증 나면 버리면 그만이라는 식의 사고방식은 단지 물건에만 영향을 미치는 데서 그치지 않습니다"
+uint8: "하지만싫증 나면 버리 면 그만이라는 식의 사고방식은 단지 물건에만 영향을 미치는 데서 그치지 않습니다"
+                                  ^^                 (공백만 약간 다름, CER 0%)
+```
+
+## 예시 2: CER 3% (미세 차이)
+
+```
+GT:   "야권은 여당에서 분명한 입장을 표해야 한다고 연일 압박 수위를 높이고 있다"
+FP32: "야권은 여당에서 분명한 입장을 표해야 한다고 연일 압박 수위를 높이고 있다"
+uint8: "야권은 여당에서 분명한 입장을 표해야 한다고 연일 압박 수위를 높이고 있다 음"
+                                                                           ^^^^ (끝에 "음" 추가)
+```
+
+## 예시 3: CER 15% (중간 오류)
+
+```
+GT:   "문 대표 출마하면 총선 누가 지휘하느냐 당 대표 사퇴하라"
+FP32: "문 대표 출마하면 총선 누가 지휘하느냐 당 대표 사퇴하라"
+uint8: "문 대표 출마하면 총선 누가 지회하느냐 당 대표 사테하라"
+                                    ^^                ^^     (지휘→지회, 사퇴→사테)
+```
+
+**양자화 오류 패턴:** 비슷한 발음의 BPE 토큰 혼동 (지휘↔지회, 사퇴↔사테). 이건 logit margin이 uint8 step보다 약간 작은 토큰 쌍에서 발생.
+
+---
+
+# 103. Docker 명령어 모음
+
+이 프로젝트에서 사용한 Docker 명령어:
+
+## NeMo (ONNX export + mel 생성)
+
+```bash
+docker run --rm --gpus all \
+  -v $WORK:/workspace/model \
+  nvcr.io/nvidia/nemo:23.06 \
+  python3 /workspace/model/export.py
+```
+
+## Acuity 6.12 (import + quantize + export NB)
+
+```bash
+docker run --rm \
+  -v $WORK:/workspace \
+  -v $ACUITY_612:/acuity612:ro \
+  -v $VIV:/vivante:ro \
+  t527-npu:v1.2 bash -c '
+    export REAL_GCC=/usr/bin/gcc
+    VSIM=/vivante/cmdtools/vsimulator
+    export LD_LIBRARY_PATH=$VSIM/lib:$VSIM/../common/lib:$VSIM/lib/x64_linux:$VSIM/lib/x64_linux/vsim:/acuity612/bin
+    export EXTRALFLAGS="-Wl,--disable-new-dtags -Wl,-rpath,$VSIM/lib -Wl,-rpath,$VSIM/../common/lib"
+    cd /acuity612/bin
+    ./pegasus import onnx --model /workspace/model.onnx ...
+    ./pegasus quantize ...
+    ./pegasus export ovxlib ...
+'
+```
+
+## Acuity 6.21 (pip 버전, torch 필요)
+
+```bash
+docker run --rm --gpus all \
+  -v $WORK:/workspace \
+  -v $VIV:/vivante:ro \
+  t527-npu:v1.2 bash -c '
+    PEGASUS="python3 /usr/local/acuity_command_line_tools/pegasus.py"
+    $PEGASUS import onnx ...
+    $PEGASUS quantize ...
+    $PEGASUS export ovxlib ...
+'
+```
+
+## aarch64 크로스 컴파일 (벤치마크 등)
+
+```bash
+docker run --rm -v /tmp:/work ubuntu:20.04 bash -c '
+    apt-get update -qq && apt-get install -y -qq gcc-aarch64-linux-gnu
+    aarch64-linux-gnu-gcc -O2 -static -o /work/bench /work/bench.c -lm
+'
+```
+
+---
+
+# 104. nbg_meta.json 구조 상세
+
+NB 파일과 함께 생성되는 **양자화 메타데이터:**
+
+```json
+{
+  "Inputs": {
+    "audio_signal_1507": {
+      "name": "audio_signal",
+      "shape": [1, 80, 301],
+      "format": "nchw",
+      "quantizer": "asymmetric_affine",
+      "quantize": {
+        "qtype": "u8",
+        "max_value": 4.542,
+        "min_value": -1.625,
+        "scale": 0.02418,      // (max - min) / 254
+        "zero_point": 67        // round(-min / scale)
+      }
+    }
+  },
+  "Outputs": {
+    "attach_logprobs_0": {
+      "name": "logprobs",
+      "shape": [1, 76, 2049],
+      "format": "nchw",
+      "quantizer": "asymmetric_affine",
+      "quantize": {
+        "qtype": "u8",
+        "max_value": 0.0,
+        "min_value": -51.767,
+        "scale": 0.20301,      // 51.767 / 254
+        "zero_point": 255       // max가 0이므로 zp=255
+      }
+    }
+  },
+  "Recurrent_connections": {}
+}
+```
+
+**핵심 필드:**
+- `scale`: float = (uint8 - zero_point) * scale
+- `zero_point`: float32 → uint8 변환 시 0.0에 해당하는 uint8 값
+- `qtype`: "u8" (unsigned) 또는 "i8" (signed)
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
