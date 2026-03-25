@@ -1237,6 +1237,64 @@ Overlap: 51 frames (≈0.51초)
 
 ---
 
+# 44. T527 NPU (Vivante VIP9000) 실측 operator 지원 현황
+
+공식 문서에 상세 op 지원 목록 없음. **우리 실험에서 확인한 결과:**
+
+## 44.1 uint8에서 HW 가속 확인된 op
+
+| Op | 모델 | 결과 | 비고 |
+|---|---|---|---|
+| Conv1D (depthwise) | Conformer | ✓ | kernel=31, 37개 op |
+| Conv1D (pointwise) | Conformer, KoCitrinet | ✓ | |
+| MatMul (attention) | 모든 모델 | ✓ | Q×K^T, V |
+| Softmax | Conformer, wav2vec2 | ✓ | 18~12개 per model |
+| LayerNorm | 모든 모델 | ✓ | |
+| Add (residual) | 모든 모델 | ✓ | |
+| GELU (Erf) | wav2vec2 | ✓ (실행됨) | 하지만 양자화 오차 큼 |
+| Reshape, Transpose | 모든 모델 | ✓ | |
+| Select (from Where) | Conformer | ✓ | Acuity가 Where→Select 변환 |
+| Pad | Conformer | ✓ | constant_value 수정 필요 |
+
+## 44.2 문제가 있는 op
+
+| Op | 문제 | 모델 | 비고 |
+|---|---|---|---|
+| Softmax (int16) | **시뮬≠디바이스** | wav2vec2 int16 | int16 DFP에서 hardware 불일치 |
+| Erf/GELU (int16) | **시뮬≠디바이스** | wav2vec2 int16 | cos sim 0.877 |
+| Where (직접) | shape inference 실패 | 수동 제거 시 | Acuity 자동 변환으로 해결 |
+
+## 44.3 NB export 실패하는 경우
+
+| 조건 | 에러 | 원인 |
+|---|---|---|
+| NB > ~120MB | status=-1 | NPU 메모리 제한 |
+| bf16 전체 | error 64768 | NPU bf16 미지원 |
+| PCQ int8 (일부 모델) | error 65280 | gen_nbg segfault |
+
+---
+
+# 45. 전체 문서 참조 인덱스
+
+이 프로젝트에서 생성한 **모든 분석 문서** 목록:
+
+| 날짜 | 파일 | 주제 |
+|------|------|------|
+| 2026-03-14 | `ai-sdk/.../2026-03-14_vocab_bug_fix_report.md` | vocab_ko.txt 버그 수정 |
+| 2026-03-15 | `ai-sdk/.../wav2vec2_base_960h_5s/RESULTS.md` | 영어 wav2vec2 CER 17.52% |
+| 2026-03-18 | `ai-sdk/.../wav2vec2_ko_eager_op12/QUANTIZATION_RESULTS.md` | 한국어 wav2vec2 양자화 실패 |
+| 2026-03-19 | `t527-stt/MODEL_INVENTORY.md` | 전체 모델 인벤토리 |
+| 2026-03-23 | `t527-stt/wav2vec2/base-korean/docs/260323_experiment_log.md` | 레이어 dump + fine-tune |
+| 2026-03-23 | `t527-stt/wav2vec2/base-korean/docs/260323_uint8_layer_debug_report.md` | 530개 레이어 분석 |
+| 2026-03-24 | `t527-stt/wav2vec2/base-korean/docs/QAT_RESEARCH.md` | QAT 연구 (15편 논문) |
+| 2026-03-24 | `t527-stt/wav2vec2/base-korean/docs/VOCAB_ANALYSIS.md` | Vocab 분석 (**철회**) |
+| 2026-03-24 | `t527-stt/wav2vec2/base-korean/docs/260324_split_model_approach.md` | Split model 개념 + 실험 |
+| 2026-03-25 | `t527-stt/wav2vec2/base-korean/docs/260325_split_model_results.md` | Split 80k 결과 |
+| 2026-03-25 | `t527-stt/conformer/SUNGBEOM_REPORT.md` | SungBeom Conformer 상세 |
+| **2026-03-25** | **`t527-stt/docs/260325_conformer_success_analysis.md`** | **이 문서 (종합 분석)** |
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
