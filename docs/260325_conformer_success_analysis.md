@@ -1984,6 +1984,120 @@ A: Conformer CTC 아키텍처는 **언어 무관.** NeMo에서 영어/중국어/
 
 ---
 
+# 71. Conformer Subsampling: Conv Stem 상세
+
+Conformer의 첫 번째 모듈 — **Convolutional Subsampling** — 이 입력 길이를 줄인다.
+
+```
+입력: [1, 80, 301] mel spectrogram (301 frames)
+  ↓ Conv2D (kernel=3, stride=2) + ReLU
+  ↓ Conv2D (kernel=3, stride=2) + ReLU
+출력: [1, 76, 512] (d_model=512)
+
+301 → (301-3)/2+1 = 150 → (150-3)/2+1 = 74 → 실제 76 (padding 포함)
+```
+
+**4배 subsampling.** Attention은 76 프레임에서 동작.
+
+**양자화 영향:**
+- 76 프레임 × 76 = 5,776 attention 쌍 (wav2vec2의 149² = 22,201의 1/4)
+- 양자화 오차 누적이 **1/4로 감소**
+- 초기 Conv2D가 mel을 d_model(512)로 매핑 → **첫 양자화 지점부터 높은 차원**
+
+---
+
+# 72. ASR 프레임워크 비교 (NeMo vs ESPnet vs SpeechBrain)
+
+T527 NB 변환 관점에서:
+
+| | NeMo | ESPnet | SpeechBrain |
+|---|---|---|---|
+| Conformer | ✓ (기본 제공) | ✓ | ✓ |
+| ONNX export | `model.export()` | `torch.onnx.export()` | `torch.onnx.export()` |
+| **T527 NB 변환 성공** | **✓ (SungBeom)** | 미시도 | **✗ (error 64768)** |
+| mel 전처리 | NeMo preprocessor | Kaldi-style | SpeechBrain |
+| 한국어 모델 | NGC 제공 | 커뮤니티 | 커뮤니티 |
+| Docker | nvcr.io/nvidia/nemo | — | — |
+
+**NeMo 권장.** T527 NB 변환 성공 사례 + NGC 한국어 모델 + ONNX export가 가장 안정적.
+
+SpeechBrain은 42.9M Conformer에서 **NB export error 64768** — 모델 내부 구조나 ONNX op이 Acuity와 비호환.
+
+---
+
+# 73. Acuity Pegasus 명령어 치트시트
+
+## 73.1 Import
+
+```bash
+pegasus import onnx --model MODEL.onnx \
+  --output-model MODEL.json --output-data MODEL.data
+```
+
+## 73.2 Quantize (uint8 KL)
+
+```bash
+pegasus quantize --model MODEL.json --model-data MODEL.data \
+  --device CPU --with-input-meta inputmeta.yml --rebuild-all \
+  --model-quantize MODEL_uint8.quantize \
+  --quantizer asymmetric_affine --qtype uint8 \
+  --algorithm kl_divergence
+```
+
+## 73.3 Export NB
+
+```bash
+cd /acuity612/bin  # vxcode/template/ 찾기 위해 bin에서 실행
+export REAL_GCC=/usr/bin/gcc
+pegasus export ovxlib --model MODEL.json --model-data MODEL.data \
+  --dtype quantized --model-quantize MODEL_uint8.quantize \
+  --with-input-meta inputmeta.yml --pack-nbg-unify \
+  --optimize VIP9000NANOSI_PLUS_PID0X10000016 \
+  --viv-sdk $VSIM --target-ide-project linux64 --batch-size 1 \
+  --output-path wksp/
+```
+
+## 73.4 주의사항
+
+- **반드시 `bin/` 디렉토리에서 실행** (vxcode/template/ 참조)
+- **REAL_GCC 설정 필수** (gen_nbg 컴파일에 사용)
+- **LD_LIBRARY_PATH에 vsimulator 경로 추가** (EXTRALFLAGS도)
+- **inputmeta의 lid는 import 후 json에서 확인** (모델마다 다름)
+- **reverse_channel: false** (오디오 모델 필수)
+
+---
+
+# 74. 디바이스 테스트 자동화 (vpm_run)
+
+```bash
+WIN_ADB="/mnt/c/Users/nsbb/AppData/Local/Android/Sdk/platform-tools/adb.exe"
+
+# 1. NB push
+$WIN_ADB push network_binary.nb /data/local/tmp/test/
+
+# 2. 입력 push + sample.txt 생성
+for i in $(seq -w 0 19); do
+  $WIN_ADB push input_${i}.dat /data/local/tmp/test/
+  $WIN_ADB shell "printf '[network]\nnetwork_binary.nb\n[input]\ninput_${i}.dat\n[output]\noutput_${i}.dat\n' > /data/local/tmp/test/sample_${i}.txt"
+done
+
+# 3. 추론
+for i in $(seq -w 0 19); do
+  $WIN_ADB shell "cd /data/local/tmp/test && LD_LIBRARY_PATH=/vendor/lib64 /data/local/tmp/vpm_run_aarch64 -s sample_${i}.txt -b 0"
+done
+
+# 4. 출력 pull
+mkdir -p outputs
+for i in $(seq -w 0 19); do
+  $WIN_ADB pull /data/local/tmp/test/output_${i}.dat outputs/
+done
+```
+
+**핵심:** `LD_LIBRARY_PATH=/vendor/lib64` 필수 (NPU 드라이버 위치).
+Windows adb.exe 사용 시 경로: `/mnt/c/Users/nsbb/AppData/Local/Android/Sdk/platform-tools/adb.exe`
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
