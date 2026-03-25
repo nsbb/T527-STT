@@ -3184,6 +3184,102 @@ export LD_LIBRARY_PATH=$VSIM/lib:$VSIM/../common/lib:$VSIM/lib/x64_linux:$VSIM/l
 
 ---
 
+# 107. Conformer vs KoCitrinet: 같은 CNN 계열인데 왜 CER 차이가 큰가
+
+| | **SungBeom Conformer** | **KoCitrinet 300f** | 차이 |
+|---|---|---|---|
+| 아키텍처 | **CNN + Self-Attention** | **CNN only** | Conformer에 Attention 추가 |
+| Params | 122.5M | ~10M | **12배** |
+| d_model | 512 | 256 | 2배 |
+| Layers | 18 | ~15 (Jasper block) | 비슷 |
+| Vocab | 2049 BPE | 2048 SentencePiece | 비슷 |
+| 입력 | mel [1,80,301] | mel [1,80,1,300] | 비슷 |
+| **CER** | **10.02%** | **44.44%** | **4.4배** |
+| 추론 | 233ms | 120ms | Citrinet 2배 빠름 |
+| NB | 102MB | 62MB | Citrinet 작음 |
+
+**CER 4.4배 차이의 원인:**
+
+1. **Self-Attention의 global context**: Conformer는 문장 전체의 맥락을 파악. KoCitrinet은 local CNN만으로 예측 → 먼 단어 간 관계 파악 못 함.
+
+2. **모델 크기 12배**: Conformer 122.5M vs KoCitrinet ~10M. 더 많은 파라미터 = 더 정밀한 음향-텍스트 매핑.
+
+3. **BPE vs SentencePiece**: 둘 다 비슷하지만, Conformer의 BPE 학습 데이터가 더 다양할 가능성.
+
+**결론:** CNN만으로도 T527 uint8에서 동작(CER 44.44%)하지만, **Self-Attention 추가**가 정확도를 **4.4배 개선** (CER 10.02%). 이때 CNN이 Attention의 양자화 취약성을 보완하여 uint8에서도 정확도 유지.
+
+---
+
+# 108. 양자화 오류의 누적 vs 상쇄 메커니즘
+
+## 108.1 오류 누적 (wav2vec2 — 실패)
+
+```
+Layer 0: 오차 ε₀ (작음)
+Layer 1: ε₁ = f(ε₀) (약간 증가)
+...
+Layer 8: ε₈ = f(ε₇) (급증 — attention softmax에서 오차 증폭)
+Layer 11: ε₁₁ = f(ε₁₀) (파괴적 수준)
+→ 최종 logit: 정보 없음 (CER 100%)
+```
+
+**오차가 누적만 됨.** 줄이는 메커니즘 없음.
+
+## 108.2 오류 상쇄 (Conformer — 성공)
+
+```
+Layer 0: FFN½ → 오차 ε₀
+         Attention → 오차 증가 (ε₀ + δ_attn)
+         Conv(31) → 오차 감소! (local averaging이 outlier 억제)
+         FFN½ → 오차 ε₀' ≈ ε₀ (원래 수준으로 복귀)
+Layer 1: 같은 패턴 반복
+...
+Layer 17: ε₁₇ ≈ ε₀ (오차가 누적되지 않음!)
+→ 최종 logit: 정보 보존 (CER 10.02%)
+```
+
+**핵심:** Conformer의 Conv(31)이 **매 레이어에서 오차를 리셋**. 이것이 18개 레이어를 거쳐도 오차가 누적되지 않는 이유.
+
+---
+
+# 109. 양자화 실험에서 절대 하지 말아야 할 것 (Anti-patterns)
+
+이 프로젝트에서 시간을 가장 많이 낭비한 **안티패턴:**
+
+## 109.1 "시뮬레이션이 좋아졌으니 디바이스도 좋아졌을 것"
+
+NB_agree 58% → 70.8% 개선에 만족 → 디바이스 CER 174% (악화). **시뮬레이션 결과를 절대 신뢰하지 마라.**
+
+## 109.2 "한 가지만 더 시도하면 될 것"
+
+PTQ 21종 시도. 12번째쯤에 "이건 될 거야" → 안 됨. 13번째... 결국 21종 전부 실패. **5~6번 시도 후 안 되면 아키텍처를 바꿔라.**
+
+## 109.3 "ONNX graph surgery로 해결하자"
+
+Where op 제거 → shape inference 깨짐 → FP32에서도 garbage. **ONNX를 수동으로 절대 수정하지 마라** (Pad constant_value fix만 예외).
+
+## 109.4 "이 분석은 확실하다" (확증 편향)
+
+vocab 분석이 확실하다고 10번+ 확답 → Conformer가 반증. **분석이 아무리 논리적이어도, 다른 아키텍처에서 검증 안 했으면 확신하지 마라.**
+
+## 109.5 "서버에서 잘 되니까 NPU에서도 잘 될 것"
+
+aihub 80k FP32 CER 9% → uint8 CER 93%. **FP32 성능 ≠ uint8 성능.**
+
+---
+
+# 110. 이 문서의 한계
+
+1. **단일 NPU (T527 VIP9000)에서만 검증.** 다른 NPU에서는 결론이 다를 수 있음.
+2. **Acuity 6.12/6.21에서만 테스트.** 다른 양자화 도구(TensorRT, RKNN 등)에서는 다를 수 있음.
+3. **테스트셋이 Zeroth-Korean (뉴스/낭독체).** 대화체, 방언, 노이즈 환경에서는 CER 다를 수 있음.
+4. **SungBeom Conformer 1개 모델만 성공.** 다른 Conformer 변형(FastConformer, E-Branchformer)은 미검증.
+5. **mel 전처리가 NeMo 의존.** Android에서 NeMo mel을 정확히 재현하는 것은 별도 검증 필요.
+
+**이 한계들은 후속 실험으로 해결해야 한다.**
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
