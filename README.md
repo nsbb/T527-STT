@@ -7,7 +7,7 @@ Allwinner T527 NPU (Vivante VIP9000NANOSI_PLUS) 용 음성인식 모델 모음.
 
 | 모델 | 언어 | 아키텍처 | 양자화 | CER | 입력 길이 | 추론시간 | RTF | NB 크기 |
 |------|------|---------|--------|-----|----------|----------|-----|---------|
-| [KoCitrinet](ko_citrinet/) | 한국어 | 1D Conv + SE (CTC) | int8 | **44.44%** | 3초 | 120ms | 0.04 | 62MB |
+| [KoCitrinet](ko_citrinet/) | 한국어 | 1D Conv + SE (CTC) | int8 | **35%** | 3초 | 120ms | 0.04 | 62MB |
 | [Wav2Vec2](wav2vec2/) | 영어 | CNN + Transformer (CTC) | uint8 | **17.52%** | 5초 | 715ms | 0.14 | 87MB |
 | [Zipformer](zipformer/) | 한국어 | Zipformer (RNN-T) | uint8/int16/PCQ | **100%** (실패) | 스트리밍 (~0.4초/청크) | ~50ms/chunk | — | 63~118MB |
 | [CitriNet EN](citrinet_en/) | 영어 | 1D Conv + SE (CTC) | uint8 | 미측정 | 3초 | 미측정 | 미측정 | 7MB |
@@ -117,7 +117,7 @@ adb pull /data/local/tmp/test/output_0.dat .
 ### 모델별 상세 결과
 
 각 모델 폴더의 README.md 참조:
-- [KoCitrinet](ko_citrinet/): CER 44.44%, 120ms — **한국어 유일한 선택**
+- [KoCitrinet](ko_citrinet/): CER 35%, 120ms — **한국어 유일한 선택**
 - [Wav2Vec2](wav2vec2/): 영어 CER 17.52%, 한국어 불가능 — [상세 분석](wav2vec2/)
 - [Zipformer](zipformer/): uint8/int16/PCQ 전 방식 CER 100% 실패 — [상세 결과](zipformer/)
 - [CitriNet EN](citrinet_en/): NB 변환 완료, 디바이스 테스트 대기
