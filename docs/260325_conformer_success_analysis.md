@@ -811,6 +811,116 @@ Conformer NB 변환에도 Acuity 6.12 사용 권장.
 
 ---
 
+# 29. Conformer 직접 학습 가이드 (aihub 데이터)
+
+SungBeom 모델 대신 **aihub 4356시간 데이터로 직접 Conformer CTC 학습**하면 도메인 특화 모델을 만들 수 있다.
+
+## 29.1 NeMo 학습 권장 설정
+
+| 항목 | 권장값 | 이유 |
+|------|--------|------|
+| 아키텍처 | Conformer CTC Medium+ | SungBeom이 CER 10.02% 검증 |
+| d_model | **512 이상** | 256은 uint8에서 CER 55% |
+| Attention heads | 8 | d_model=512 기준 |
+| Conv kernel | **31** | 음소 길이에 맞는 receptive field |
+| Encoder layers | **18** | SungBeom과 동일 |
+| **Vocab** | **~2000 BPE** | 2049가 uint8에서 검증됨 |
+| Tokenizer | SentencePiece BPE | NeMo 표준 |
+| Sample rate | 16000 Hz | 표준 |
+| n_mels | 80 | 표준 |
+| Input length | 3초 (301 frames) → NB 고정 | T527 NB 제한 |
+
+## 29.2 학습 설정
+
+```yaml
+# NeMo conformer_ctc_bpe.yaml 기반
+model:
+  encoder:
+    d_model: 512
+    n_heads: 8
+    n_layers: 18
+    conv_kernel_size: 31
+    subsampling_factor: 4
+    pos_emb_max_len: 5000
+
+  decoder:
+    vocabulary_size: 2048  # BPE vocab
+
+  optim:
+    name: adamw
+    lr: 0.001  # 큰 데이터셋에서 시작
+    weight_decay: 1e-3
+
+trainer:
+  max_epochs: 100
+  accumulate_grad_batches: 4  # effective batch 128
+  precision: 16  # fp16 mixed precision
+```
+
+## 29.3 학습 후 NB 변환
+
+학습 완료 → `.nemo` 파일 → NeMo export → ONNX → static shape → Pad fix → Acuity → NB
+
+**SungBeom 파이프라인 그대로 재사용 가능** (`t527-stt/conformer/SUNGBEOM_REPORT.md` 섹션 3 참조).
+
+## 29.4 기대 결과
+
+SungBeom (AI Hub 학습) CER 10.02% → **같은 데이터 + 같은 아키텍처면 비슷하거나 더 좋은 결과** 가능. 도메인 특화(전화망, 회의 등)하면 해당 도메인에서 추가 개선.
+
+참고: [NeMo GitHub Issue #3243: Training conformer_ctc with Korean](https://github.com/NVIDIA/NeMo/issues/3243)
+
+---
+
+# 30. Edge NPU STT 배포 트렌드 (2024-2025)
+
+| 플랫폼 | NPU | INT8 | FP16 | 특징 |
+|--------|-----|------|------|------|
+| **T527 (Vivante VIP9000)** | 2 TOPS | **HW ✓** | SW only | **uint8 W8A8 강제** |
+| RK3588 (RKNN) | 6 TOPS | HW ✓ | **HW ✓** | Split INT8+FP16 가능 |
+| Qualcomm Hexagon | 15+ TOPS | HW ✓ | **HW ✓** | INT16 kernel 최적화 |
+| Samsung Exynos NPU | 15+ TOPS | HW ✓ | HW ✓ | Mixed precision |
+| ARM Ethos-U85 | 1 TOPS | **HW ✓** | ✗ | Conformer INT8 배포 검증 |
+| MediaTek APU | 10+ TOPS | HW ✓ | HW ✓ | INT4까지 지원 |
+
+**T527은 가장 제약이 큰 NPU** — FP16 HW 미지원, W8A8 강제. 하지만 **Conformer CTC가 이 제약 안에서 CER 10.02% 달성**.
+
+**업계 트렌드:**
+- Conformer/Squeezeformer + INT8 PTQ가 edge STT 표준
+- 1-bit/2-bit 극저비트 양자화 연구 활발 (ENERZAi Whisper 1.58-bit)
+- Streaming Conformer로 실시간 STT
+- ARM Ethos-U85에서 INT8 Conformer 배포 성공 사례 ([ARM 블로그](https://developer.arm.com/community/arm-community-blogs/b/internet-of-things-blog/posts/end-to-end-int8-conformer-on-arm-training-quantization-and-deployment-on-ethos-u85))
+
+---
+
+# 31. 향후 연구 방향
+
+## 31.1 단기 (현재 가능)
+
+| 작업 | 기대 효과 |
+|------|----------|
+| **aihub + Conformer CTC 직접 학습** | 도메인 특화, CER 개선 |
+| **Streaming Conformer** 탐색 | 실시간 STT |
+| **Squeezeformer** 시도 | Conformer 대비 작은 NB, 빠른 추론 |
+| **5초/10초 입력** NB 재변환 | 슬라이딩 윈도우 오버헤드 감소 |
+
+## 31.2 중기
+
+| 작업 | 기대 효과 |
+|------|----------|
+| Conformer + QAT | uint8 정확도 추가 개선 |
+| E-Branchformer 시도 | Conformer 변형, 더 높은 정확도 가능 |
+| Android 앱 NeMo mel 구현 | 앱에서 직접 추론 |
+
+## 31.3 장기
+
+| 작업 | 기대 효과 |
+|------|----------|
+| 다음 세대 NPU (VIP9000 후속) | FP16 HW 지원 시 모든 모델 가능 |
+| INT4/INT2 양자화 | 더 작은 NB, 더 빠른 추론 |
+| On-device 학습 | 사용자 적응형 STT |
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
