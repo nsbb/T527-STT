@@ -3358,6 +3358,89 @@ CTC decode: ㅇ가ㅏ ㄴ나 ㅏ다 ← 쓰레기
 
 ---
 
+# 114. Conformer CTC의 Greedy vs Beam Search Decoding
+
+## 114.1 현재: Greedy Decoding
+
+```python
+token_ids = argmax(logits, axis=-1)  # 프레임별 최고 점수 토큰
+# blank 제거, 연속 중복 제거
+```
+
+- **장점:** 빠름 (O(T×V)), 추가 메모리 없음
+- **단점:** 최적 해가 아닐 수 있음
+
+## 114.2 Beam Search Decoding
+
+```python
+# beam_width = 5
+# 매 프레임에서 상위 5개 후보 유지
+# 누적 확률이 가장 높은 시퀀스 선택
+```
+
+- **장점:** 더 나은 텍스트 (CER 1~3%p 개선 가능)
+- **단점:** O(T×V×beam) 연산, 메모리 증가
+
+## 114.3 T527에서의 Beam Search 가능성
+
+NPU 추론 233ms 후 **CPU에서 beam search:**
+- beam_width=5, 76 frames, 2049 vocab
+- 연산: 76 × 2049 × 5 = 778,620 operations
+- **ARM CPU에서 ~10ms** (추가 지연 무시 가능)
+
+**Greedy → Beam Search 전환으로 CER 10.02% → 8~9% 개선 가능.**
+
+---
+
+# 115. T527 NPU의 Tiling Strategy
+
+T527 NPU가 102MB NB를 어떻게 처리하는지:
+
+```
+NPU SRAM: ~2MB (VIP9000 NANOSI_PLUS 기준)
+NB 크기: 102MB (DRAM에 저장)
+
+→ 모델 전체가 SRAM에 안 들어감
+→ Tiling: 모델을 작은 타일로 나눠서 SRAM에 순차 로드
+→ 각 타일 계산 후 결과를 DRAM에 저장, 다음 타일 로드
+```
+
+**SungBeom memory pool: 14.7MB** — 이것은 중간 activation buffer 크기.
+NPU가 매 레이어마다 weight를 DRAM에서 SRAM으로 스트리밍하면서 계산.
+
+이것이 **NB 크기 > 120MB에서 실패하는 이유**: activation buffer + weight 스트리밍에 필요한 총 bandwidth/memory가 하드웨어 한계 초과.
+
+---
+
+# 116. 모든 실험의 핵심 수치 요약 (원페이저)
+
+**T527 NPU uint8 STT — 숫자로 보는 4주:**
+
+```
+시도한 모델:        15개+
+양자화 실험:        100+
+디바이스 테스트:    2000+
+레이어 dump:       530개 × 2 (FP32 + uint8)
+생성한 NB 파일:    50+
+작성한 문서:       12편, 3000+ 줄
+GPU 시간:          ~30시간 (QAT + fine-tune)
+Docker 빌드 시간:  ~5시간
+
+결과:
+  성공한 모델:     4개 (Conformer ×2, KoCitrinet, Wav2Vec2 EN)
+  실패한 모델:     11개+
+  최고 CER:        10.02% (SungBeom Conformer)
+  최악 CER:        100%+ (wav2vec2 KO, Zipformer, HuBERT)
+
+핵심 발견:
+  아키텍처가 전부: CNN+Attention ✓, 순수 Transformer ✗
+  vocab은 무관:    2049에서 성공, 56에서 실패
+  FP32 ≠ uint8:   FP32 CER 9%인 모델이 uint8 CER 93%
+  시뮬 ≠ 디바이스: 31.5% argmax 일치
+```
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
