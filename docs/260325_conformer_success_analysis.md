@@ -1940,6 +1940,50 @@ attention_score = Q @ K^T + Q @ rel_pos_bias
 
 ---
 
+# 70. FAQ: 자주 받는 질문
+
+## Q1. "왜 그냥 서버에서 안 돌리고 NPU에서 돌리려고 하나요?"
+
+A: **오프라인/실시간 요구사항.** 인터넷 연결 없이도 디바이스에서 즉시 음성 인식이 필요한 경우 (IoT, 임베디드, 보안). 서버 왕복 지연 200~500ms vs NPU 233ms.
+
+## Q2. "FP32로 돌리면 안 되나요?"
+
+A: T527 NPU에서 FP32는 **SRAM 부족으로 실행 불가** (362MB NB). FP16은 HW 미가속 (17초, 42배 느림). **uint8만 HW 가속.**
+
+## Q3. "다른 NPU로 바꾸면 안 되나요?"
+
+A: RK3588(FP16 HW 지원), Qualcomm Hexagon, Samsung Exynos 등이 대안. 하지만 T527이 이미 선정된 플랫폼이고, **Conformer uint8 PTQ로 CER 10.02% 달성**했으므로 하드웨어 교체 없이 해결 가능.
+
+## Q4. "Conformer가 왜 되는지 한 줄로 설명해주세요."
+
+A: **매 레이어에 CNN(depthwise conv)이 있어서 Attention이 넓혀놓은 activation을 다시 좁혀주기 때문.**
+
+## Q5. "wav2vec2에 CNN을 추가하면 되지 않나요?"
+
+A: 이론적으로 가능 (Wav2Vec2-Conformer 모델 존재). 하지만 기존 pretrained weight를 재사용 못 할 수 있고, 재학습 필요. **이미 동작하는 Conformer CTC를 쓰는 게 빠름.**
+
+## Q6. "QAT를 더 하면 wav2vec2도 되지 않나요?"
+
+A: QAT로 margin을 3배 개선했지만 여전히 uint8 step 미달 (ratio 0.66x). **아키텍처의 근본 한계.** QAT보다 아키텍처 교체가 효과적.
+
+## Q7. "int16이나 bf16은 안 되나요?"
+
+A: int16 DFP는 T527에서 실행되지만 **CER이 uint8보다 나쁨** (KoCitrinet int16 CER 330%, SungBeom int16 CER 9.59% — 거의 동일). bf16은 **NB export 실패.** fp16은 **HW 미가속 (17초).**
+
+## Q8. "vocab을 줄이면 더 좋아지나요?"
+
+A: **아니요.** Conformer vocab 2049로 CER 10.02%. vocab을 줄이면 CTC alignment은 쉬워지지만 정보 손실. **vocab보다 아키텍처가 훨씬 중요.**
+
+## Q9. "이 결과를 다른 프로젝트에도 적용할 수 있나요?"
+
+A: **같은 NPU(Vivante VIP9000)를 쓰는 모든 SoC**에 적용 가능. T527, T536, A733 등. 핵심 원칙(CNN 하이브리드, mel 입력, d_model≥512)은 **다른 NPU에서도 유사하게 적용**.
+
+## Q10. "한국어 말고 다른 언어도 되나요?"
+
+A: Conformer CTC 아키텍처는 **언어 무관.** NeMo에서 영어/중국어/일본어 등 다국어 Conformer 모델 제공. 핵심은 아키텍처이므로 언어 바꿔도 uint8 양자화 가능.
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
