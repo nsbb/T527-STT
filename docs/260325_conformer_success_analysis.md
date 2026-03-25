@@ -3280,6 +3280,84 @@ aihub 80k FP32 CER 9% → uint8 CER 93%. **FP32 성능 ≠ uint8 성능.**
 
 ---
 
+# 111. Conformer의 Multi-Head Self-Attention 상세
+
+SungBeom Conformer: **8 heads, d_model=512** → head당 64 차원.
+
+## 111.1 Attention Head의 역할 분화
+
+NLP Transformer에서 확인된 패턴 (ASR에서도 유사 추정):
+- **Head 1-2**: 인접 프레임 관계 (local context)
+- **Head 3-5**: 중거리 의존성 (단어 내)
+- **Head 6-8**: 장거리 의존성 (문장 구조)
+
+Conformer에서는 **Conv(31)이 local context를 담당**하므로, Attention head가 **중/장거리에 집중**할 수 있음. 이것이 Conformer > Transformer인 이유 중 하나.
+
+## 111.2 Attention head와 양자화
+
+각 head는 독립적인 Q, K, V 행렬곱을 수행:
+```
+head_i = Softmax(Q_i × K_i^T / √64) × V_i
+```
+
+- **head당 64 차원**: uint8 256단계로 64 차원 벡터 표현 → 차원당 4단계
+- **8 heads 합산**: 개별 head의 양자화 오차가 **평균화**됨 → 전체 오차 감소
+
+이것은 d_model=256 (cwwojin, head당 64, 4 heads)보다 d_model=512 (SungBeom, head당 64, 8 heads)가 양자화에 유리한 이유:
+- **8 heads의 오차 평균 > 4 heads의 오차 평균** (통계적 분산 감소)
+
+---
+
+# 112. 양자화와 CTC Loss의 관계
+
+CTC는 **blank 토큰**을 사용하여 alignment을 학습. 양자화가 CTC에 미치는 영향:
+
+## 112.1 정상 (uint8 양자화 후에도 blank 패턴 유지)
+
+```
+Frame:  1  2  3  4  5  6  7  8  9  10
+FP32:   B  B  가 가 B  B  나 B  B  다
+uint8:  B  B  가 가 B  B  나 B  B  다  ← 같음!
+CTC decode: 가 나 다 ✓
+```
+
+## 112.2 비정상 (blank이 non-blank으로 뒤집힘)
+
+```
+Frame:  1  2  3  4  5  6  7  8  9  10
+FP32:   B  B  가 가 B  B  나 B  B  다
+uint8:  B  ㅇ 가 ㅏ B  ㄴ 나 B  ㅏ 다  ← blank→non-blank 뒤집힘!
+CTC decode: ㅇ가ㅏ ㄴ나 ㅏ다 ← 쓰레기
+```
+
+**wav2vec2 한국어에서 발생한 현상이 정확히 이것.** margin이 작아서 blank과 non-blank의 경계가 uint8에서 무너짐.
+
+**Conformer에서는:**
+- log softmax 출력 → blank는 ~0.0, non-blank은 -20~-50
+- 차이가 매우 커서 uint8 step 0.203으로도 blank 패턴 유지
+
+---
+
+# 113. Noise 환경에서의 Conformer 성능 예측
+
+현재 테스트는 **깨끗한 뉴스/낭독체** (Zeroth-Korean). 실제 배포 환경은 노이즈가 있을 수 있음.
+
+## 예상 CER 변화 (추정):
+
+| 환경 | SNR | CER 예상 | 근거 |
+|------|-----|---------|------|
+| 깨끗한 실내 | 30dB+ | **10.02%** | 현재 테스트 |
+| 일반 사무실 | 20dB | 15~20% | FP32 대비 +5%p |
+| 차량 내부 | 10dB | 25~40% | 노이즈 심각 |
+| 공장/길거리 | 5dB | 40~60% | 사용 어려움 |
+
+**개선 방법:**
+- **SpecAugment** 학습 시 적용 (NeMo 기본 제공) → 노이즈 내성 향상
+- **Beamforming** 마이크 어레이 → SNR 향상
+- **VAD** (Voice Activity Detection) → 비음성 구간 제거
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
