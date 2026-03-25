@@ -1901,6 +1901,45 @@ attention_score = Q @ K^T + Q @ rel_pos_bias
 
 ---
 
+# 68. 왜 이 문서가 필요한가
+
+이 문서는 **4주간 100+ 실험**의 결과를 한 곳에 모은 것이다.
+
+**이전 상태:** 각 실험 결과가 10+ 개 파일에 흩어져 있고, 실험 간 연결이 불명확. 새로운 사람이 합류하면 "왜 wav2vec2를 안 쓰고 Conformer를 쓰나?"에 대한 답을 찾으려면 파일 10개를 다 읽어야 함.
+
+**이 문서의 역할:**
+1. **의사결정 근거**: "왜 Conformer인가?"에 대한 정량적 답변
+2. **실패 아카이브**: 같은 실수를 반복하지 않기 위한 기록
+3. **온보딩 자료**: 새 팀원이 프로젝트 맥락을 빠르게 이해
+4. **기술 부채 방지**: 이유 모르고 "원래 이렇게 하는 거야"가 되는 것 방지
+
+---
+
+# 69. 용어 사전
+
+| 용어 | 설명 |
+|------|------|
+| **uint8** | 0~255 정수. T527 NPU의 유일한 실용적 양자화 타입 |
+| **W8A8** | Weight 8-bit + Activation 8-bit. T527 NPU 강제 |
+| **W4A16** | Weight 4-bit + Activation FP16. LLM에서 사용 (T527 미지원) |
+| **CER** | Character Error Rate. 문자 단위 오류율 (한국어 STT 표준 지표) |
+| **WER** | Word Error Rate. 단어 단위 오류율 (영어 STT 표준 지표) |
+| **NB** | Network Binary. Acuity가 생성하는 T527 NPU 실행 파일 |
+| **PTQ** | Post-Training Quantization. 학습 후 양자화 (우리가 주로 사용) |
+| **QAT** | Quantization-Aware Training. 학습 중 양자화 시뮬레이션 |
+| **CTC** | Connectionist Temporal Classification. 음성→텍스트 정렬 알고리즘 |
+| **BPE** | Byte-Pair Encoding. 서브워드 토크나이저 |
+| **mel** | mel spectrogram. 주파수 에너지 표현 (80 bins × time frames) |
+| **Acuity** | VeriSilicon의 NPU 모델 변환 도구 (Pegasus 명령어) |
+| **logit** | 모델의 raw 출력값 (softmax 이전) |
+| **margin** | top-1 logit - top-2 logit. 양자화 생존의 핵심 지표 |
+| **depthwise conv** | 채널별 독립 CNN. Conformer의 핵심 구성 요소 |
+| **Conformer** | CNN + Self-Attention 하이브리드 ASR 아키텍처 (Google, 2020) |
+| **wav2vec2** | Self-supervised Transformer ASR (Facebook, 2020) |
+| **NPU** | Neural Processing Unit. AI 추론 전용 하드웨어 가속기 |
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
