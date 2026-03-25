@@ -1341,6 +1341,70 @@ LLM의 W4A16이 되는 건 activation이 FP16이기 때문. T527은 W8A8이라 a
 
 ---
 
+# 48. 새 발견: Wav2Vec2-Conformer — 두 세계의 장점
+
+HuggingFace에 **`Wav2Vec2-Conformer`** 모델이 존재:
+> [huggingface.co/docs/transformers/model_doc/wav2vec2-conformer](https://huggingface.co/docs/transformers/model_doc/wav2vec2-conformer)
+
+**wav2vec2의 self-supervised learning + Conformer encoder 구조:**
+- raw waveform 입력 (wav2vec2처럼)
+- 하지만 encoder가 **Conformer** (CNN + Attention)
+- 기존 wav2vec2 pretrained weight 활용 가능
+
+**T527 적용 가능성:**
+- Conformer encoder → uint8 양자화 가능할 것 (SungBeom 검증)
+- raw waveform 입력 → mel 대비 불리하지만 Conformer CNN이 보상 가능
+- **시도해볼 가치 있음** — wav2vec2 pretrained + Conformer 양자화 장점
+
+---
+
+# 49. Activation Outlier: Transformer의 근본 문제
+
+최근 연구 ([Activation Outliers in Transformer Quantization, 2025](https://arxiv.org/abs/2603.04308))에 따르면:
+
+> "Transformer 모델은 특정 채널에 **극단적 outlier activation**을 생성하는 경향이 있다. 이 outlier가 per-tensor 양자화에서 전체 범위를 지배하여 대부분의 값이 낮은 해상도로 표현된다."
+
+이것이 정확히 우리가 관찰한 현상:
+
+```
+한국어 wav2vec2 L10 residual Add:
+  99%의 값: [-3, +3] → 이 범위만 보면 uint8 충분
+  0.01% outlier: [-174, +245] → 이것이 range 420으로 키움
+  → 대부분의 값이 uint8 3~4단계에 몰림 → 해상도 극도로 부족
+```
+
+**Conformer의 depthwise conv가 이 outlier를 억제:**
+- Conv(kernel=31)의 local averaging 효과
+- 각 프레임이 인접 30개 프레임과 평균화 → 극단적 outlier 자연 감소
+- 결과: activation range가 좁게 유지 → uint8에서 충분한 해상도
+
+**참고 논문:**
+- [Quantizable Transformers: Removing Outliers by Helping Attention Heads Do Nothing (NeurIPS 2023)](https://proceedings.neurips.cc/paper_files/paper/2023/file/edbcb7583fd8921dad78adecfe06a99b-Paper-Conference.pdf)
+- [Mitigating the Impact of Outlier Channels for Language Model Quantization with Activation Regularization (2024)](https://arxiv.org/html/2404.03605v1)
+
+---
+
+# 50. 최종 메시지
+
+이 문서는 T527 NPU에서 한국어 STT를 배포하기 위한 **4주간의 실험, 15개 모델, 100+ 양자화 시도**의 종합 분석이다.
+
+**잘못한 것:**
+- vocab 크기가 핵심이라고 잘못 분석하여 팀에 vocab 56 전환을 권고
+- wav2vec2를 고치는 데 2주를 투자 (해결 불가능한 문제)
+- 시뮬레이션 결과를 신뢰하여 잘못된 최적화 방향 추구
+
+**올바른 것:**
+- Conformer가 T527 uint8에서 CER 10.02% 달성 확인
+- 아키텍처가 양자화 성패를 결정한다는 원칙 도출
+- 530개 레이어 분석, logit margin 실측 등 정량적 근거 확보
+
+**앞으로:**
+- **Conformer CTC + aihub 대규모 데이터** = T527 한국어 STT의 답
+- 음절 vocab (~2000 BPE) 사용 가능 (자모 56 불필요)
+- d_model ≥ 512, 18L, kernel=31 권장
+
+---
+
 # 부록: Vocab 56 전환 권고 철회
 
 이전에 "vocab을 자모 56으로 바꿔야 한다"고 권고했으나, **이는 잘못된 분석에 기반한 것으로 철회한다.**
