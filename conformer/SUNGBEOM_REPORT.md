@@ -309,6 +309,65 @@ export REAL_GCC=/usr/bin/gcc
 
 ---
 
+## 3-A. 양자화 방식 비교 (uint8 KL vs uint8 MA vs int16 DFP)
+
+3가지 양자화를 모두 시도하여 100샘플 슬라이딩 윈도우로 비교.
+
+### 양자화 방식 설명
+
+| 양자화 | 타입 | scale 방식 | zero_point | 설명 |
+|--------|------|-----------|------------|------|
+| uint8 AA KL | unsigned 8-bit (0~255) | float scale | 있음 | `float = (uint8 - zp) * scale`. KL divergence로 range 최적화 |
+| uint8 AA MA | unsigned 8-bit (0~255) | float scale | 있음 | 동일 구조, moving average로 range 결정 |
+| int16 DFP | signed 16-bit (-32768~32767) | 2^fl (정수 지수) | 없음 | `float = int16 / 2^fl`. 정밀도 높지만 유연성 낮음 |
+
+### 각 양자화별 NB 양자화 파라미터
+
+**uint8 KL:**
+
+| | scale | zero_point | range |
+|---|---|---|---|
+| 입력 mel | 0.02418 | 67 | [-1.63, 4.54] |
+| 출력 logprobs | 0.20301 | 255 | [-51.77, 0.0] |
+
+**uint8 MA:**
+
+| | scale | zero_point | range |
+|---|---|---|---|
+| 입력 mel | 0.02418 | 67 | [-1.63, 4.54] |
+| 출력 logprobs | 0.20301 | 255 | [-51.77, 0.0] |
+
+**int16 DFP:**
+
+| | fl | scale (=1/2^fl) | range |
+|---|---|---|---|
+| 입력 mel | 12 | 0.000244 | [-8.0, 8.0] |
+| 출력 logprobs | 9 | 0.00195 | [-64.0, 64.0] |
+
+### 비교 결과 (100샘플)
+
+| 양자화 | NB 크기 | 추론/chunk | CER | 비고 |
+|--------|---------|----------|-----|------|
+| **uint8 AA KL** | **102MB** | **233ms** | **10.59%** | **최적 (속도/크기/정확도 밸런스)** |
+| uint8 AA MA | 102MB | 233ms | 10.79% | KL보다 0.2%p 나쁨 |
+| int16 DFP KL | 200MB | 564ms | 10.18% | 0.4%p 더 좋지만 2.4배 느림, NB 2배 |
+
+**분석:**
+- int16이 CER 0.4%p 더 좋지만, NB 2배 크고 추론 2.4배 느림 → 실용적으로 uint8 KL 최적
+- uint8 KL과 MA는 거의 동일 (0.2%p 차이) → KL이 약간 우세
+- 이 모델에서는 int16이 uint8보다 나음 (KoCitrinet에서는 int16이 CER 330%로 오히려 망함)
+- Conformer 아키텍처가 int16 DFP와도 호환되는 것으로 확인
+
+### 결과 CSV 파일
+
+| 파일 | 양자화 |
+|------|--------|
+| `kr_sungbeom_uint8_kl_100.csv` | uint8 AA KL (추론시간 포함) |
+| `kr_sungbeom_uint8_ma_100.csv` | uint8 AA MA (추론시간 포함) |
+| `kr_sungbeom_int16_dfp_100.csv` | int16 DFP KL (추론시간 포함) |
+
+---
+
 ## 4. 테스트 방법
 
 ### 슬라이딩 윈도우
@@ -340,6 +399,38 @@ CER = edit_distance(NPU 출력, GT) / len(GT) * 100
 - 16kHz mono WAV
 - 뉴스/책 낭독체
 - 길이: 5.8초 ~ 20.5초 (평균 ~10초)
+
+### 실제 음성 길이별 처리 시간 (uint8 KL 기준)
+
+모델 인풋: **3초** (301 mel frames). 슬라이딩 윈도우로 긴 음성 처리.
+
+| 음성 길이 | chunks | NPU 추론 합계 | RTF |
+|----------|--------|-------------|-----|
+| 3초 | 1 | **233ms** | 0.078 |
+| 5초 | 2 | **466ms** | 0.093 |
+| 8초 | 3 | **699ms** | 0.087 |
+| 10초 | 4 | **932ms** | 0.093 |
+| 15초 | 6 | **1.4초** | 0.093 |
+| 20초 | 8 | **1.9초** | 0.095 |
+
+RTF(Real-Time Factor) = 처리시간 / 음성길이. 1 미만이면 실시간보다 빠름.
+모든 길이에서 RTF < 0.1 → **10배 이상 실시간보다 빠름.**
+
+### 테스트 방식 주의사항: vpm_run vs Android 앱
+
+| | 본 테스트 (Conformer) | KoCitrinet CER 44.44% |
+|---|---|---|
+| **테스트 도구** | **vpm_run** (CLI) | **Android 앱** (bundle_app) |
+| NPU 드라이버 | libVIPlite.so | libVIPlite.so (동일) |
+| mel 전처리 | Python (NeMo) | Java/JNI (앱 내장) |
+| 디코딩 | Python (SentencePiece) | Java (SentencePiece) |
+
+**vpm_run과 앱은 같은 NPU 드라이버를 사용하므로 NB 추론 결과 자체는 동일.** 차이가 날 수 있는 부분은 mel 전처리와 디코딩뿐.
+
+단, 공정한 비교를 위해서는 Conformer도 Android 앱에서 테스트하는 것이 바람직함. 앱 통합 시 필요한 작업:
+1. NeMo mel 전처리를 JNI/C++로 구현 (librosa와 다름!)
+2. SentencePiece BPE 디코딩 Android 구현
+3. 슬라이딩 윈도우 로직 구현
 
 ---
 
