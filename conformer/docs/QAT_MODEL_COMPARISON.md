@@ -10,11 +10,57 @@
 | **QAT AIHub 100k final** | AIHub 100K (84시간) | 10 | 102MB | `qat_aihub_output/wksp_100k_nbg_unify/` |
 | **QAT AIHub 100k best** | AIHub 100K (84시간) | best (ep04) | 102MB | `qat_aihub_output/wksp_100k_best_nbg_unify/` |
 
-### QAT 학습 설정
-- FakeQuantize 3곳: encoder input, encoder output, decoder output
-- MarginLoss: target=0.3, lambda=0.1
-- lr=1e-5, batch 16
-- 서버: nsbb@192.168.110.108
+---
+
+## 0. QAT 학습 상세
+
+### QAT #1: 자체 ailab 데이터
+
+| 항목 | 값 |
+|------|-----|
+| 학습 데이터 | 자체 수집 ailab 데이터 (월패드 음성) |
+| 데이터 수 | — (소규모) |
+| 에폭 | 최소 13+ (best=ep13) |
+| lr | 1e-5 |
+| batch_size | 16 |
+| val_loss (best) | — |
+| val_loss (final) | — |
+| 서버 | nsbb@192.168.110.108 |
+| NB 결과 | ep13: unseen CER **6.4%**, final: unseen CER **6.7%** |
+
+### QAT #2: AIHub 100K
+
+| 항목 | 값 |
+|------|-----|
+| 원본 데이터 | AIHub 4,356시간 (4,860,928행) |
+| 필터링 | CER=0.0 + duration 0.5~15초 + 005.명령어 제외 → 200,000개 |
+| 샘플링 | 100,000개 (seed=42) |
+| train/val | train 95,000 (84.63hr) / val 5,000 (4.44hr) |
+| 에폭 | 10 (Epoch 0~9) |
+| steps/epoch | 5,937 |
+| lr | 1e-5 (CosineAnnealing, eta_min=1e-7) |
+| batch_size | 16 |
+| optimizer | AdamW (weight_decay=0.01) |
+| precision | FP32 |
+| val_loss (best, ep04) | **0.1416** |
+| val_loss (final, ep09) | 0.151 |
+| train_loss (final) | 0.057 |
+| margin_mean (final) | 9.89 |
+| 소요 시간 | ~2시간 (RTX 6000 Ada 48GB) |
+| SLURM Job | 18337 |
+| NB 결과 | best(ep04): CER **103.6%** (garbage), final: unseen CER **5.3%** |
+
+### 공통 QAT 설정
+
+| 항목 | 값 |
+|------|-----|
+| FakeQuantize 위치 | encoder input, encoder output, decoder output (3곳) |
+| FakeQuantize 방식 | per-tensor asymmetric uint8, STE backward |
+| MarginLoss | target=0.3, lambda=0.1 |
+| CNN freeze | pre_encode (conv subsampling) 파라미터 고정 |
+| 학습 대상 | Transformer encoder + decoder (114M params) |
+| gradient_clip | 1.0 |
+| scheduler | CosineAnnealingLR |
 
 ---
 
@@ -96,17 +142,11 @@
 
 ## 5. 결과 CSV 위치
 
-### PTQ (18k)
 ```
-conformer/results/conformer_*.csv (11개)
-```
-
-### QAT AIHub 100k final (18k)
-```
-conformer/results/conformer_qat100k_*.csv (11개)
-```
-
-### QAT 모델 비교 (unseen 38개)
-```
-conformer/results/qat_comparison_test_split.csv
+conformer/results/
+├── ptq_uint8_kl_18k/              ← PTQ 18k 결과 (11개 CSV)
+├── qat_aihub_100k_18k/            ← QAT AIHub 100k 18k 결과 (11개 CSV)
+├── qat_model_comparison/          ← QAT 모델 간 비교 (unseen 38개)
+├── ptq_quantize_comparison/       ← PTQ 양자화 방식 비교 (uint8 KL/MA, int16 DFP)
+└── misc/                          ← cwwojin, wav2vec2, worst30 등 기타
 ```
