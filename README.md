@@ -7,6 +7,7 @@ Allwinner T527 NPU (Vivante VIP9000NANOSI_PLUS) 용 음성인식 모델 모음.
 
 | 모델 | 언어 | 아키텍처 | 양자화 | CER | 입력 길이 | 추론시간 | RTF | NB 크기 |
 |------|------|---------|--------|-----|----------|----------|-----|---------|
+| [Conformer CTC](conformer_ctc/) | 한국어 | CNN + Attention (CTC) | **uint8 QAT** | **5.3%** | 3초 | 233ms | 0.11 | 102MB |
 | [KoCitrinet](ko_citrinet/) | 한국어 | 1D Conv + SE (CTC) | int8 | **35%** | 3초 | 120ms | 0.04 | 62MB |
 | [Wav2Vec2](wav2vec2/) | 영어 | CNN + Transformer (CTC) | uint8 | **17.52%** | 5초 | 715ms | 0.14 | 87MB |
 | [Zipformer](zipformer/) | 한국어 | Zipformer (RNN-T) | uint8/int16/PCQ | **100%** (실패) | 스트리밍 (~0.4초/청크) | ~50ms/chunk | — | 63~118MB |
@@ -28,6 +29,64 @@ Allwinner T527 NPU (Vivante VIP9000NANOSI_PLUS) 용 음성인식 모델 모음.
 - **VivanteIDE**: v5.7.2 (6.12용) / v5.8.2 (6.21용)
 - **양자화**: uint8 asymmetric_affine, moving_average
 - **Export**: `pegasus export ovxlib --pack-nbg-unify`
+
+---
+
+## Conformer CTC QAT — 한국어 CER 5.3% (SungBeom, 122.5M params)
+
+PTQ(Post-Training Quantization)로는 CER 44%에 불과했던 Conformer CTC 모델을 QAT(Quantization-Aware Training)로 재학습하여 **CER 5.3%** 달성. 60+ 양자화 시도(10 아키텍처 × 21 방법) 중 유일하게 실용 수준에 도달한 결과.
+
+### 핵심 수치
+
+| 항목 | 값 |
+|------|-----|
+| 모델 | Conformer CTC (NeMo, 122.5M params) |
+| 아키텍처 | CNN + Attention hybrid (CTC) |
+| 양자화 | uint8 QAT (FakeQuantize + STE + MarginLoss) |
+| CER | 44% (PTQ) → **5.3%** (QAT) — 8배 개선 |
+| 입력 | 3초 청크 (mel spectrogram [1,80,301]) |
+| 추론시간 | 233ms/chunk |
+| RTF | 0.11 (9배 실시간) |
+| NB 크기 | 102MB |
+
+### QAT 학습 환경
+
+- **데이터**: AIHub 84시간 (95K 샘플)
+- **GPU**: 4-GPU DDP (RTX 6000 Ada)
+- **QAT 기법**: FakeQuantize 3지점 (encoder in/out, decoder out), MarginLoss target=0.3
+- **핵심 발견**: val_loss 최소점(epoch 4) = NPU CER 100%, 최종 epoch 10 = NPU CER 5.3%. val_loss로 조기 종료하면 실패.
+
+### 양자화 실패 원인 분석 (logit margin)
+
+한국어 모델이 uint8 양자화에 특히 취약한 근본 원인:
+- **한국어 logit margin**: 0.005 (1위-2위 logit 차이)
+- **영어 logit margin**: 0.34
+- **uint8 양자화 step**: 0.05
+- 한국어 margin(0.005) < uint8 step(0.05) → 양자화 시 1위-2위 역전 빈발
+- CNN+Attention 하이브리드(Conformer)만 QAT로 margin 확보에 성공
+
+### 검증 결과 (18,368 샘플 × 11 데이터셋)
+
+| 환경 | CER |
+|------|-----|
+| 잡음 없음 (No noise) | 7.49% |
+| 상담 (Consultation) | 10.03% |
+| 회의 (Meeting) | 15.29% |
+| 강의 (Lecture) | 15.66% |
+| 저품질 (Low quality) | 19.01% |
+| 원거리 3m (Far-field) | 21.73% |
+
+**에러 유형**: Substitution 63.7%, Insertion 23.6%, Deletion 12.7%
+
+### ONNX → NB 변환 파이프라인
+
+```
+NeMo export (4462 nodes) → onnxsim (1905 nodes) → Pad fix (18 ops) → Acuity → NB (102MB)
+```
+
+### Android 앱
+
+ConformerTestActivity (JNI/C) — 디바이스 실시간 추론 검증 완료.
 
 ---
 
@@ -108,16 +167,19 @@ adb pull /data/local/tmp/test/output_0.dat .
 
 ### T527 NPU 양자화 제약
 
+- **uint8 QAT로 한국어 CER 5.3% 달성** — Conformer CTC (122.5M params) + QAT (FakeQuantize + STE + MarginLoss)로 PTQ CER 44% → QAT CER 5.3%, 8배 개선
+- **CNN+Attention 하이브리드만 uint8 생존** — 60+ 양자화 시도 (10 아키텍처 × 21 방법) 중 Conformer만 유의미한 결과. 한국어 logit margin 0.005 vs 영어 0.34 → uint8 step 0.05에서 한국어가 특히 취약
 - **uint8 안정 동작** — 모든 모델에서 NB 생성·실행 가능
 - **int16 DFP 조건부 동작** — NB 크기 ≤118MB이면 정상 실행 (Zipformer int16 118MB 동작 확인). ≥153MB면 status=-1 (Wav2Vec2 int16 153MB 실패). 이전 "T527 NPU는 int16 미지원" 결론은 **오류** — NB 크기 제한이 원인이었음.
 - **bf16 NB 생성 실패** — Acuity gen_nbg segfault 또는 export error 64768
 - **대형 Transformer 양자화 한계** — 5868노드(Zipformer)는 uint8/int16 모두 CER 100% (에러 누적). ~2000노드(Wav2Vec2 영어)는 uint8 CER 17.5% 성공
-- **CNN 모델 한국어 가능** — CitriNet (1D Conv) 계열만 한국어 의미 있는 출력
+- **val_loss ≠ NPU CER** — QAT 학습 중 val_loss 최소 지점(epoch 4)이 NPU CER 100%, 최종 epoch 10이 CER 5.3%. 반드시 NPU 실측으로 검증 필요
 
 ### 모델별 상세 결과
 
 각 모델 폴더의 README.md 참조:
-- [KoCitrinet](ko_citrinet/): CER 35%, 120ms — **한국어 유일한 선택**
+- [Conformer CTC](conformer_ctc/): **CER 5.3%**, 233ms — **한국어 최고 성능 (QAT)** — [상세 결과](conformer_ctc/)
+- [KoCitrinet](ko_citrinet/): CER 35%, 120ms — 한국어 PTQ 기준 최선
 - [Wav2Vec2](wav2vec2/): 영어 CER 17.52%, 한국어 불가능 — [상세 분석](wav2vec2/)
 - [Zipformer](zipformer/): uint8/int16/PCQ 전 방식 CER 100% 실패 — [상세 결과](zipformer/)
 - [CitriNet EN](citrinet_en/): NB 변환 완료, 디바이스 테스트 대기
