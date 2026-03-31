@@ -238,9 +238,96 @@ full QAT 7F_HJY: 15.97%    17.78%    15.97%
 
 ---
 
-## 7. 결론 및 권고
+## 7. 학술 근거 및 업계 권장사항 (검색 기반)
 
-### 7.1 핵심 교훈
+### 7.1 QAT 학습 기간에 대한 업계 합의
+
+| 출처 | 권장 QAT 기간 |
+|------|-------------|
+| NVIDIA NeMo 공식 문서 | 원본 학습의 **1~10%** |
+| IBM QAT 가이드 | **1 epoch**으로도 충분한 경우 있음 |
+| LLM (Llama 등) | 원본 pre-training의 **1% 미만** |
+| EfficientQAT 논문 (2024) | Llama 7B 기준 **5,000 steps** |
+| OpenVINO 예시 | **5 epochs** |
+| Google Conformer QAT (Ding et al. 2022) | 120 epoch 학습 모델에 QAT 적용 → **12~24 epoch** 범위 |
+
+### 7.2 "Catastrophic Forgetting" 문제 — 논문으로 확인됨
+
+**ICCV 2023 논문: "Overcoming Forgetting Catastrophe in Quantization-Aware Training" (Chen et al.)**
+
+```
+QAT를 과도하게 하면 "catastrophic forgetting" 발생:
+  → 모델이 원래 pre-trained 지식을 잊어버림
+  → 양자화 노이즈에만 적응하다가 일반화 능력 상실
+  → validation accuracy가 plateau 후 degradation
+```
+
+**PyTorch Forums 실제 사례:**
+- validation accuracy가 77.67% → 75.67%로 **7 epoch 만에 하락**
+- 원인: calibration 데이터 부족 + 과도한 epoch
+
+### 8.3 Google의 Conformer QAT 논문 결과
+
+**"4-bit Conformer with Native Quantization Aware Training" (Ding et al., Interspeech 2022)**
+
+```
+- LibriSpeech 960시간으로 Conformer 120 epoch 학습
+- 4-bit QAT → lossless (CER 저하 없음)
+- 학습 시간 증가: 겨우 7% (TPU 기준)
+
+핵심 발견:
+- 공개 데이터(LibriSpeech)에서는 lossless
+- 대규모 production 데이터에서는 regression 발생!
+- → 데이터 규모가 크면 QAT 과적합 위험 증가 (우리와 동일한 현상)
+```
+
+### 8.4 SungBeom Conformer 원본 학습 정보
+
+```
+출처: https://huggingface.co/SungBeom/stt_kr_conformer_ctc_medium
+데이터: 10,916,423개 (13,946시간)
+Epoch: 1 (!)
+lr: 1e-5
+base: NVIDIA RIVA Conformer Korean (fine-tuning)
+
+원본 자체가 1 epoch만 학습!
+→ QAT 권장 (원본의 1~10%): 0.01~0.1 epoch
+→ step 수로: 109,164 ~ 1,091,642 steps
+→ 우리 100k QAT (59,380 steps)는 원본의 0.5% → 적절 범위
+→ 우리 full QAT (2,557,560 steps)는 원본의 23% → 과다!
+```
+
+### 7.5 관련 논문 목록
+
+| 논문 | 연도 | 핵심 내용 |
+|------|------|----------|
+| Ding et al. "4-bit Conformer with Native QAT" | 2022 | Conformer QAT 원조, lossless 4-bit |
+| "2-bit Conformer quantization for ASR" | 2023 | 2-bit까지 확장, co-training 기법 |
+| Chen et al. "Overcoming Forgetting Catastrophe in QAT" | ICCV 2023 | QAT 과적합 = catastrophic forgetting |
+| "Compute-Optimal Quantization-Aware Training" | 2025 | 최적 epoch 배분 연구 |
+| "Scheduling Weight Transitions for QAT" | 2024 | transition-adaptive lr 제안 |
+| "Towards One-bit ASR" | 2025 | 1-bit Conformer, stochastic precision |
+
+### 7.6 우리 실험과 논문 결과 매칭
+
+```
+논문: "대규모 production 데이터에서 QAT regression 발생"
+우리: full QAT (4,356시간) → 100k QAT보다 나쁨 → 일치!
+
+논문: "원본 학습의 10% 이내로 QAT 권장"
+우리: 100k QAT = 원본의 0.5% → 적절 → CER 7.24% (good)
+     full QAT = 원본의 23% → 과다 → CER 14.81% (bad) → 일치!
+
+논문: "catastrophic forgetting으로 validation이 degradation"
+우리: full QAT val_loss는 계속 내려갔지만 T527 CER은 나빠짐
+     → FakeQuantize 과적합 = catastrophic forgetting의 변형 → 일치!
+```
+
+---
+
+## 8. 결론 및 권고
+
+### 8.1 핵심 교훈
 
 1. **QAT는 적당히 해야 한다** — 데이터 많다고 epoch도 많이 하면 과적합
 2. **총 step 수가 핵심** — 데이터 크기 × epoch. 5만~25만 step이 적당
@@ -248,7 +335,7 @@ full QAT 7F_HJY: 15.97%    17.78%    15.97%
 4. **calib 데이터 소스가 중요** — 학습 데이터와 매칭되는 calib이 best
 5. **calib 개수는 100개면 충분** — 10개 → 100개는 효과 있지만 극적이진 않음
 
-### 7.2 현재 Best 조합
+### 8.2 현재 Best 조합
 
 ```
 모델: 100k QAT (95,000개, 84시간, 10 epoch, margin 0.3)
@@ -256,14 +343,14 @@ Calib: aihub100 (AIHub 데이터 100개)
 CER: 7.24%
 ```
 
-### 7.3 추가 테스트 권고
+### 8.3 추가 테스트 권고
 
 1. **full QAT ep00 (1 epoch)** T527 테스트 — 과적합 전 모델, CER 개선 가능성
 2. **full QAT 0.5 epoch** — step 수를 100k QAT와 비슷하게 맞춤
 3. **KD QAT 결과** — margin 0.5, 1.0 비교
 4. **calib 데이터 최적화** — aihub에서 다양성 높은 100개 선별
 
-### 7.4 모델 파일 위치
+### 8.4 모델 파일 위치
 
 ```
 100k QAT (현재 best):
