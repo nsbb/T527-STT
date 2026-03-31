@@ -1,0 +1,59 @@
+# Conformer CTC mel 전처리 설정
+# 이 설정으로 mel을 생성해야 T527 NPU CER 7.24% 재현 가능
+# NeMo AudioToMelSpectrogramPreprocessor 기준
+
+preprocessor:
+  sample_rate: 16000
+  n_fft: 512
+  win_length: 320        # 0.02초 = 20ms
+  hop_length: 160        # 0.01초 = 10ms = 100fps
+  n_mels: 80
+  fmin: 0.0
+  fmax: null              # null = sample_rate / 2 = 8000
+  window: "hann"
+  normalize: "per_feature" # 각 mel bin별 mean/var 정규화
+  dither: 0.0             # ★ 필수! 기본값 1e-5인데 0으로 해야 함
+  pad_to: 0               # ★ 필수! 기본값 16인데 0으로 해야 함
+  log: true               # log mel
+  log_zero_guard_type: "add"
+  log_zero_guard_value: 1e-05
+
+# 출력 shape: [1, 80, T]
+# T = ceil(audio_samples / hop_length) = ceil(seconds * 16000 / 160) = seconds * 100
+# 3초 음성 → T ≈ 301 frames
+
+input:
+  format: "wav"
+  channels: 1             # mono
+  sample_rate: 16000
+  dtype: "float32"        # PCM → float32 정규화 (-1.0 ~ 1.0)
+
+quantization:
+  # NB 입력으로 변환 시 양자화 파라미터 (nbg_meta.json에서 가져옴)
+  # 100k QAT + aihub100 calib 기준
+  qtype: "uint8"
+  scale: 0.025880949571728706
+  zero_point: 84
+  formula: "uint8_value = clip(round(mel_float / scale) + zero_point, 0, 255)"
+
+sliding_window:
+  window_frames: 301      # 3.01초
+  stride_frames: 250      # 2.5초
+  overlap_frames: 51      # 0.51초
+  output_frames: 76       # 301 / subsampling_factor(4) ≈ 76
+  stride_output: 62       # 250 / 4 ≈ 62 (merge 시 사용)
+
+# ⚠️ 주의사항
+# 1. librosa로 mel 만들면 NeMo와 결과 다름 — 반드시 NeMo preprocessor 사용
+# 2. dither=0.0 안 하면 매 실행마다 결과 달라짐 (random noise)
+# 3. pad_to=0 안 하면 frame 수가 달라져서 sliding window 계산 틀어짐
+# 4. normalize="per_feature"가 핵심 — global normalize 하면 결과 다름
+
+# NeMo Docker에서 mel 생성하는 코드:
+# docker run --rm -v $WORK:/workspace nvcr.io/nvidia/nemo:23.06 python3 -c "
+#   import nemo.collections.asr as nemo_asr
+#   m = nemo_asr.models.EncDecCTCModelBPE.restore_from('model.nemo', map_location='cpu')
+#   m.preprocessor.featurizer.dither = 0.0
+#   m.preprocessor.featurizer.pad_to = 0
+#   # m.preprocessor(input_signal, input_signal_length) → mel
+# "
