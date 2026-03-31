@@ -1,0 +1,10 @@
+model,calib,calib_count,samples,avg_cer
+100k_qat,real100,100,20,0.45
+100k_qat,aihub100,100,20,0.45
+100k_qat,mix50,100,20,0.45
+full_qat,real100,100,20,0.5
+full_qat,aihub100,100,20,0.0
+full_qat,mix50,100,20,0.5
+ptq,original10,10,108,21.2
+100k_qat,original10,10,108,3.29
+full_qat,original10,10,368,varies_by_dataset
