@@ -1,0 +1,92 @@
+# Experiment Config — conformer_qat_custom294_margin0.3_ep30
+# 이 파일과 동일한 설정으로 재현 가능
+
+experiment:
+  name: "conformer_qat_custom294_margin0.3_ep30"
+  date: "2026-03-27"
+  type: "QAT + Margin Loss (no KD)"
+  script: "train_qat.py (1 GPU version, train_qat_1gpu.py)"
+
+model:
+  base: "stt_kr_conformer_ctc_medium.1.nemo"
+  architecture: "Conformer CTC Medium"
+
+data:
+  source: "custom recordings"
+  recording_sets:
+    - "7F_HJY"
+    - "7F_KSK"
+    - "modelhouse_2m"
+    - "modelhouse_2m_noheater"
+    - "modelhouse_3m"
+  total_samples: 368
+  total_duration: "17.8 minutes"
+  split:
+    train: 294
+    val: 36
+    test: 38
+    ratio: "80/10/10"
+  manifest_train: "custom_train_manifest.json"
+  manifest_val: "custom_val_manifest.json"
+  manifest_test: "custom_test_manifest.json"
+
+hyperparameters:
+  lr: 1e-5
+  batch_size: 16
+  epochs: 30
+
+qat:
+  fake_quantize_bits: 8
+  fake_quantize_type: "per-tensor asymmetric uint8"
+  fake_quantize_positions:
+    - "encoder input (mel spectrogram)"
+    - "encoder output"
+    - "decoder output (logits)"
+
+margin_loss:
+  margin_target: 0.3
+  margin_lambda: 0.1
+
+knowledge_distillation:
+  enabled: false
+
+loss_function: "CTC + 0.1 * MarginLoss"
+
+environment:
+  server: "gpu-114"
+  gpu: "NVIDIA RTX 6000 Ada Generation x 1"
+  slurm_job_id: 6625
+
+training:
+  training_time: "~3 minutes"
+  val_check_interval: 1.0  # every epoch
+
+results:
+  val_loss_best_epoch: 13
+  val_loss_best: 0.0797
+  overfitting_after: "ep13"
+  t527_cer:
+    ep13_best: "~6%"
+
+output:
+  model_best: "conformer_qat_best_ep13.nemo"
+  model_final: "conformer_qat_final.nemo"
+  output_dir: "qat_custom_30ep_output/"
+
+notes:
+  - "DDP 4GPU에서 validation skip 발생 (val 36 < batch 16 per GPU) — 1 GPU로 재학습"
+  - "ep13 이후 overfitting 발생"
+  - "커스텀 녹음 데이터만 사용 (17.8분, 매우 적은 데이터)"
+
+reproduce:
+  command: |
+    python3 train_qat_1gpu.py \
+      --nemo-path stt_kr_conformer_ctc_medium.1.nemo \
+      --train-manifest custom_train_manifest.json \
+      --val-manifest custom_val_manifest.json \
+      --output-dir qat_custom_30ep_output \
+      --epochs 30 \
+      --lr 1e-5 \
+      --batch-size 16 \
+      --margin-target 0.3 \
+      --margin-lambda 0.1
