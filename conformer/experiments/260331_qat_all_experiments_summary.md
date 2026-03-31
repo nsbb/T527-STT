@@ -139,13 +139,18 @@ qat_aihub_full_output/
 | 1 | `conformer_qat_full_best_ep08.nemo` | AIHub 전체, ep08 | `qat_aihub_full_output/` |
 | 2 | `conformer_qat_full_best_ep09.nemo` | AIHub 전체, ep09 | `qat_aihub_full_output/` |
 
-**기존 T527 테스트 완료:**
+**T527 테스트 완료:**
 
-| 모델 | T527 CER |
-|------|----------|
-| PTQ (baseline) | 10.02% |
-| AIHub 100k final (ep09) | 5.3% |
-| 자체데이터 best (ep13) | ~6% |
+| 모델 | T527 CER (unseen 38) | T527 avg_real (368) | 비고 |
+|------|---------------------|--------------------|----|
+| PTQ (baseline) | 13.3% | 16.44% | |
+| AIHub 100k final (ep09) | 5.3% | 7.24% (aihub100 calib) | **최고** |
+| 자체데이터 best (ep13) | ~6% | | |
+| **AIHub 전체 ep09** | | **12.85% (real100 calib)** | 100k보다 나쁨 |
+| **AIHub 전체 ep09** | | **14.81% (aihub100 calib)** | 100k보다 나쁨 |
+
+**AIHub 전체 QAT 결론:** val_loss는 좋지만(0.069) 실제 T527 CER은 100k보다 나쁨. 43배 더 많은 gradient step으로 모델이 과적합.
+**calibration 실험:** calib 10개→100개 필수. calib 소스는 다양할수록 좋음 (aihub > real).
 
 ---
 
