@@ -2,3 +2,6 @@
 *.data
 *.onnx
 *.safetensors
+testset/
+lightning_logs/
+wav2vec2/kor_3s_ref09_best_nb/
