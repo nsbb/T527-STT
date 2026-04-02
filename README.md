@@ -3,6 +3,8 @@
 Allwinner T527 NPU (Vivante VIP9000NANOSI_PLUS) 용 음성인식 모델 모음.
 모든 모델은 uint8/int8 양자화되어 `.nb` (Network Binary) 형태로 변환 완료.
 
+> **📄 [논문 초안](paper/paper.md)** | **📊 [Novelty Analysis](paper/NOVELTY_ANALYSIS.md)** — 한국어 ASR + W8A8 uint8 + 2 TOPS NPU 실배포, 공개 선행연구 없음
+
 ## 모델 목록
 
 | 모델 | 언어 | 아키텍처 | 양자화 | CER | 입력 길이 | 추론시간 | RTF | NB 크기 |
