@@ -1,0 +1,12 @@
+﻿test_set,avg_cer(%),avg_time(s)
+007.저음질_eval_p.csv,13.19,0.012
+009.한국어_강의_eval_p.csv,9.27,0.01
+010.회의음성_eval_p.csv,9.75,0.01
+012.상담음성_eval_p.csv,4.49,0.011
+eval_clean_p.csv,8.17,0.01
+eval_other_p.csv,7.35,0.01
+modelhouse_2m_noheater.csv,1.42,0.011
+modelhouse_2m.csv,6.65,0.01
+modelhouse_3m.csv,13.51,0.01
+7F_HJY.csv,6.89,0.009
+7F_KSK.csv,1.67,0.009
