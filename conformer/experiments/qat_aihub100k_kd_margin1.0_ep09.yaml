@@ -1,0 +1,112 @@
+# Experiment Config — conformer_qat_aihub100k_kd_margin1.0_ep10
+# 이 파일과 동일한 설정으로 재현 가능
+
+experiment:
+  name: "conformer_qat_aihub100k_kd_margin1.0_ep10"
+  date: "2026-03-31"
+  type: "QAT + Knowledge Distillation + Margin Loss"
+  script: "train_qat_kd.py"
+
+model:
+  base: "stt_kr_conformer_ctc_medium.1.nemo"
+  architecture: "Conformer CTC Medium"
+  params: "122.5M (114M trainable, 7.6M frozen)"
+  vocab: "2049 (BPE, SentencePiece)"
+  input: "mel spectrogram (80 bins)"
+  frozen_layers: "encoder.pre_encode (conv subsampling)"
+
+data:
+  source_csv: "/nas04/nlp_sk/STT/data/train/base/train_base_4356hr.csv"
+  sampling:
+    method: "random"
+    seed: 42
+    max_samples: 100000
+  filter:
+    cer: 0.0
+    duration_min: 0.5
+    duration_max: 15.0
+    exclude_paths:
+      - "/nas03/data_audio/005.명령어 음성"
+  split:
+    train: 95000
+    val: 5000
+  total_hours: 84.63
+  manifest_train: "aihub_100k_train.json"
+  manifest_val: "aihub_100k_val.json"
+
+hyperparameters:
+  lr: 1e-5
+  batch_size: 32
+  epochs: 10
+  optimizer: "AdamW"
+  weight_decay: 0.01
+  scheduler: "CosineAnnealingLR"
+  scheduler_eta_min: 1e-7
+  gradient_clip: 1.0
+  precision: "FP32"
+  num_workers: 8
+
+qat:
+  fake_quantize_bits: 8
+  fake_quantize_type: "per-tensor asymmetric uint8"
+  fake_quantize_positions:
+    - "encoder input (mel spectrogram)"
+    - "encoder output"
+    - "decoder output (logits)"
+
+margin_loss:
+  margin_target: 1.0  # 이전 0.5에서 올림
+  margin_lambda: 0.1
+
+knowledge_distillation:
+  enabled: true
+  teacher: "stt_kr_conformer_ctc_medium.1.nemo (FP32, frozen)"
+  kd_lambda: 0.5
+  kd_temperature: 2.0
+  kd_loss_type: "KL divergence"
+
+loss_function: "CTC + 0.1 * MarginLoss + 0.5 * KD_Loss"
+
+environment:
+  server: "TBD"
+  gpu: "NVIDIA RTX 6000 Ada Generation x 1"
+  slurm_job_id: 6640
+  pytorch: "2.6.0+cu124"
+  nemo: "2.7.2"
+  python: "3.10"
+
+training:
+  val_check_interval: 1.0
+  log_every_n_steps: 1
+  checkpoint_save_top_k: 5
+  checkpoint_monitor: "val_loss"
+
+output:
+  model_final: "conformer_qat_aihub100k_kd_margin1.0_ep10.nemo"
+  output_dir: "qat_kd_100k_margin1.0_output/"
+
+comparison:
+  vs_margin_0.5: "qat_kd_100k_output/"
+  vs_no_kd: "qat_aihub_output/"
+  variable_changed: "margin_target 0.5 → 1.0"
+
+notes:
+  - "margin_target 0.5→1.0으로 올림"
+  - "KD가 CTC 정확도를 보존해주므로 margin을 더 세게 줄 수 있다는 가설"
+  - "동일 데이터(aihub_100k), 동일 하이퍼파라미터, margin만 변경 → 공정 비교"
+
+reproduce:
+  command: |
+    python3 train_qat_kd.py \
+      --nemo-path stt_kr_conformer_ctc_medium.1.nemo \
+      --train-manifest aihub_100k_train.json \
+      --val-manifest aihub_100k_val.json \
+      --output-dir qat_kd_100k_margin1.0_output \
+      --epochs 10 \
+      --lr 1e-5 \
+      --batch-size 32 \
+      --num-workers 8 \
+      --margin-target 1.0 \
+      --margin-lambda 0.1 \
+      --kd-lambda 0.5 \
+      --kd-temperature 2.0

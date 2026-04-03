@@ -1,0 +1,101 @@
+# Experiment Config — conformer_qat_aihub1m_margin0.3_ep01
+# 이 파일과 동일한 설정으로 재현 가능
+
+experiment:
+  name: "conformer_qat_aihub1m_margin0.3_ep01"
+  date: "2026-03-31"
+  type: "QAT + Margin Loss (no KD)"
+  script: "train_qat.py (1 GPU version)"
+  rationale: "100k×10ep(59,380 steps)와 비슷한 step 수(59,375)를 더 다양한 데이터로 달성"
+
+model:
+  base: "stt_kr_conformer_ctc_medium.1.nemo"
+  architecture: "Conformer CTC Medium"
+  params: "122.5M (114M trainable, 7.6M frozen)"
+  vocab: "2049 (BPE, SentencePiece)"
+  input: "mel spectrogram (80 bins)"
+  frozen_layers: "encoder.pre_encode (conv subsampling)"
+
+data:
+  source_csv: "/nas04/nlp_sk/STT/data/train/base/train_base_4356hr.csv"
+  sampling:
+    method: "random"
+    seed: 42
+    max_samples: 1000000
+  filter:
+    cer: 0.0
+    duration_min: 0.5
+    duration_max: 15.0
+    exclude_paths:
+      - "/nas03/data_audio/005.명령어 음성"
+  split:
+    train: 950000
+    val: 50000
+  manifest_train: "aihub_1m_train.json"
+  manifest_val: "aihub_1m_val.json"
+
+hyperparameters:
+  lr: 1e-5
+  batch_size: 16
+  epochs: 1
+  optimizer: "AdamW"
+  weight_decay: 0.01
+  scheduler: "CosineAnnealingLR"
+  scheduler_eta_min: 1e-7
+  gradient_clip: 1.0
+  precision: "FP32"
+  num_workers: 8
+
+qat:
+  fake_quantize_bits: 8
+  fake_quantize_type: "per-tensor asymmetric uint8"
+  fake_quantize_positions:
+    - "encoder input (mel spectrogram)"
+    - "encoder output"
+    - "decoder output (logits)"
+
+margin_loss:
+  margin_target: 0.3
+  margin_lambda: 0.1
+
+knowledge_distillation:
+  enabled: false
+
+loss_function: "CTC + 0.1 * MarginLoss"
+
+estimated_steps:
+  steps_per_epoch: 59375  # 950000 / 16
+  total_steps: 59375
+  vs_original_training: "8.7% (원본 682,276 steps)"
+  vs_100k_10ep: "동일 수준 (59,380 steps)"
+
+environment:
+  gpu: "NVIDIA RTX 6000 Ada Generation x 1"
+  slurm_job_id: 6641
+  pytorch: "2.6.0+cu124"
+  nemo: "2.7.2"
+  python: "3.10"
+
+comparison:
+  vs_100k_10ep: "동일 step, 데이터 10배 다양"
+  vs_full_10ep: "step 43배 적음, 과적합 방지"
+  hypothesis: "다양한 데이터 1번 > 적은 데이터 10번 반복"
+
+output:
+  model_final: "conformer_qat_aihub1m_margin0.3_ep01.nemo"
+  output_dir: "qat_1m_1ep_output/"
+
+reproduce:
+  command: |
+    python3 train_qat_1gpu.py \
+      --nemo-path stt_kr_conformer_ctc_medium.1.nemo \
+      --train-manifest aihub_1m_train.json \
+      --val-manifest aihub_1m_val.json \
+      --output-dir qat_1m_1ep_output \
+      --epochs 1 \
+      --lr 1e-5 \
+      --batch-size 16 \
+      --num-workers 8 \
+      --use-margin-loss \
+      --margin-target 0.3 \
+      --margin-lambda 0.1
