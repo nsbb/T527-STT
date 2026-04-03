@@ -1,6 +1,6 @@
 # Deploying Korean Speech Recognition on a 2 TOPS Edge NPU: W8A8 Quantization-Aware Training for Conformer CTC
 
-**Authors:** [Author Names]
+**Authors:** Huisoo Kim
 
 **Affiliation:** [Institution]
 
