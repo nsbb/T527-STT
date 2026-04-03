@@ -1,0 +1,332 @@
+\documentclass[a4paper,11pt,twocolumn]{article}
+
+% XeLaTeX Korean support
+\usepackage{fontspec}
+\usepackage{kotex}
+\setmainfont{UnBatang}
+\setsansfont{UnDotum}
+\setmonofont{UnTaza}
+
+% Packages
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage[margin=2cm]{geometry}
+\usepackage{caption}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{titlesec}
+
+% Compact spacing
+\titlespacing*{\section}{0pt}{1.5ex plus 0.5ex minus 0.2ex}{1.0ex plus 0.2ex}
+\titlespacing*{\subsection}{0pt}{1.2ex plus 0.3ex minus 0.2ex}{0.8ex plus 0.2ex}
+\setlength{\parskip}{0.3em}
+\setlength{\textfloatsep}{8pt}
+\setlength{\floatsep}{8pt}
+\setlength{\intextsep}{6pt}
+
+\title{\Large\bfseries 2\,TOPS 엣지 NPU에서의 한국어 음성인식 배포:\\Conformer CTC를 위한 W8A8 양자화 인식 학습}
+
+\author{Huisoo Kim (김희수)\\[0.3em]
+HDC LABS\\
+Seoul, South Korea\\
+\texttt{nsbb@hdc-labs.com}}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+% ============================================================
+\begin{abstract}
+초저전력 엣지 신경망 처리 장치(NPU)에서의 자동 음성인식(ASR) 배포는 여전히 미해결 과제이며, 특히 양자화에 강건한 아키텍처 연구가 부족한 비영어 언어에서는 더욱 그러하다. 본 연구는 엄격한 W8A8 양자화 제약 조건 하에서 2\,TOPS 엣지 NPU(VeriSilicon VIP9000)에 한국어 ASR을 배포한 최초의 사례를 제시한다. 6개 ASR 모델 계열을 체계적으로 평가한 결과, CNN-어텐션 하이브리드인 Conformer CTC만이 W8A8 양자화에서 유의미한 성능을 유지하였으며, 순수 Transformer 아키텍처는 모두 무작위 출력 수준으로 성능이 저하되었다. 마진 기반 손실 함수를 활용한 양자화 인식 학습(QAT) 방법을 제안하여 PTQ 열화의 78\%를 회복하였으며, 공개 AIHub 벤치마크 18,000개 샘플에 대해 CER 11.01\%, 실환경 데이터 368개 샘플에 대해 7.24\%를 달성하고, RTF 0.08--0.09를 기록하였다. 또한 고정 윈도우 추론 전략이 잡음이 많은 짧은 발화에서 FP32 서버 추론을 능가함을 발견하였다(CER 11.13\% 대 13.19\%). 본 연구는 5\,TOPS 미만 NPU에서 배포된 최초의 한국어 ASR 시스템이다.
+\end{abstract}
+
+% ============================================================
+\section{서론}
+
+스마트 홈 및 IoT 응용 분야---월패드 인터콤, 스마트 스피커, 임베디드 제어 패널---에서 엣지 디바이스의 확산은 네트워크 연결 없이 동작하는 온디바이스 자동 음성인식에 대한 수요를 창출하였다. 클라우드 기반 한국어 ASR 서비스가 경쟁력 있는 정확도를 달성한 반면~\cite{returnzero,clova}, 초저전력 NPU에서의 엣지 배포는 한국어에 대해 거의 탐구되지 않았다.
+
+한국어는 교착어로서, 문법 관계가 어간에 접사와 조사를 결합하여 표현되므로 영어에 비해 표면 어휘가 훨씬 방대하다. 한국어 ASR에서 경쟁력 있는 정확도를 달성하려면 약 2,000개의 BPE 토큰이 필요한 반면, 영어 문자 수준 모델은 약 30개로 충분하다~\cite{koo2021}. 이 어휘 규모는 W8A8 양자화 난이도를 직접적으로 높인다: 2,049개 CTC 출력 클래스가 uint8의 256개 이산 레벨을 공유하면 출력 로짓의 양자화 스텝 크기는 약 0.19가 되어, 단 1스텝의 반올림 오류만으로도 최상위 예측 토큰이 뒤집힐 수 있다. 이에 비해 32개 클래스를 가진 영어 모델은 스텝 크기가 약 7.6으로, 동일한 비트 폭에서 40배 더 큰 마진을 가진다.
+
+Allwinner T527과 같은 최신 엣지 SoC는 1--2\,TOPS 수준의 NPU를 통합하고 있으며, 이는 서버 GPU나 고사양 모바일 NPU(Apple ANE ${\sim}$16\,TOPS, Qualcomm Hexagon ${\sim}$15\,TOPS)에서 사용 가능한 연산량보다 수 자릿수 낮다. 결정적으로, 이러한 저사양 NPU는 \textbf{W8A8 양자화}를 강제한다---모델의 가중치와 활성화 모두 부호 없는 8비트 정수로 표현해야 한다. 이는 최근 ASR 양자화 문헌에서 연구된 W4A16 또는 W8A16 방식보다 훨씬 엄격한 제약이다~\cite{ding2022,li2023,chen2025}.
+
+본 연구의 기여는 다음과 같다:
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+    \item \textbf{W8A8 하에서의 아키텍처 생존 분석:} 6개 ASR 모델 계열을 2\,TOPS NPU에서 체계적으로 평가하여, Conformer CTC만이 W8A8 양자화에서 생존함을 입증한다.
+    \item \textbf{MarginLoss 기반 QAT:} 마진 기반 보조 손실 함수를 사용한 QAT 방법을 제안하여 PTQ 열화의 78\%를 회복한다. 84시간의 소규모 부분집합이 4,356시간 전체 데이터셋 학습을 능가하는 FakeQuantize 과적합 현상을 규명한다.
+    \item \textbf{고정 윈도우 추론의 이점:} NPU의 정적 입력 형상에 의해 강제되는 고정 윈도우 추론이 잡음이 많은 짧은 발화에서 FP32 서버 추론을 능가함을 발견한다.
+\end{enumerate}
+
+% ============================================================
+\section{관련 연구}
+
+\subsection{엣지 ASR 배포}
+
+Gulati 등~\cite{gulati2020}은 합성곱과 자기 어텐션 모듈을 결합한 Conformer 아키텍처를 제안하였다. Apple~\cite{apple2024}은 Apple Watch에서 스트리밍 Conformer를 배포하여 FP16에서 WER 4.5\%, RTF 0.19를 달성하였다. ARM~\cite{arm2025}은 시뮬레이션된 Ethos-U85 NPU에서 INT8 Conformer-S를 시연했으나, 양자화 후 정확도는 제시하지 않았다.
+
+\subsection{ASR 모델 양자화}
+
+Ding 등~\cite{ding2022}은 LibriSpeech에서 4비트 Conformer QAT를 달성하였다(WER 2.1\%). Li 등~\cite{li2023}은 2비트로 확장하였고, Amazon~\cite{amazon2022}은 8비트 미만 범용 양자화기를 제안하였다. 그러나 이 모든 접근법은 W4A16 또는 혼합 정밀도를 가정하며 영어에만 집중한다.
+
+\subsection{한국어 ASR}
+
+AIHub~\cite{aihub}와 KsponSpeech~\cite{bang2020} 등의 데이터셋이 발전을 이끌었다. SungBeom Conformer CTC Medium~\cite{sungbeom}은 13,946시간으로 학습된 강력한 기준선을 제공한다. Wang 등~\cite{wang2023}은 한국어 Conformer-LSTM을 분석했으나 하드웨어 배포까지 진행하지 않았다. ENERZAi~\cite{enerzai2025}는 1.58비트 Whisper로 CER 6.45\%를 달성했으나 NPU 배포 지표를 보고하지 않았다.
+
+% ============================================================
+\section{방법}
+
+\subsection{대상 하드웨어}
+
+Allwinner T527 SoC의 VeriSilicon VIP9000NANOSI\_PLUS NPU를 대상으로 한다. 696\,MHz에서 2\,TOPS의 INT8 처리량을 제공하며, \textbf{W8A8 양자화만 가능}, \textbf{정적 입력 형상}, \textbf{NB 120\,MB 크기 제한}의 제약을 부과한다.
+
+\subsection{모델 아키텍처}
+
+SungBeom Conformer CTC Medium~\cite{sungbeom}(122.5M 파라미터, 18 Conformer 레이어, 8헤드 어텐션, $d_\text{model}{=}512$, 깊이별 합성곱 커널 31, 2,049 BPE 어휘)을 채택한다. 입력 $[1, 80, 301]$, 출력 $[1, 76, 2049]$.
+
+\subsection{모델 변환 파이프라인}
+
+NeMo~\cite{nemo} $\rightarrow$ ONNX $\rightarrow$ onnxsim(4,462$\rightarrow$1,905 노드) $\rightarrow$ Acuity uint8 KL-발산 캘리브레이션(100 샘플) $\rightarrow$ NB(102\,MB).
+
+\subsection{양자화 인식 학습}
+
+세 위치에 FakeQuantize를 삽입하고, 마진 손실을 도입한다:
+\begin{equation}
+\mathcal{L}_{\text{margin}} = \frac{1}{T} \sum_{t=1}^{T} \text{ReLU}\big(m - (z_{t,\text{top1}} - z_{t,\text{top2}})\big)
+\end{equation}
+전체 손실:
+\begin{equation}
+\mathcal{L} = \mathcal{L}_{\text{CTC}} + \lambda \, \mathcal{L}_{\text{margin}}, \quad \lambda = 0.1, \; m = 0.3
+\end{equation}
+
+AIHub 100k 샘플(84.63시간)을 AdamW($10^{-5}$), 10 에포크, RTX 6000 Ada에서 약 2시간 학습.
+
+\subsection{고정 윈도우 추론}
+
+301 프레임 윈도우, 250 프레임 스트라이드(51 프레임 겹침)로 슬라이딩. 3초 미만 발화는 301 프레임으로 제로 패딩.
+
+% ============================================================
+\section{실험 설정}
+
+\subsection{평가 데이터}
+
+\textbf{공개 벤치마크}(AIHub, 18,000개 샘플): eval\_clean, eval\_other, 007-저음질, 009-강의, 010-회의, 012-상담 각 3,000개. \textbf{실환경 데이터}(368개 샘플): 월패드 인터콤 녹음 5개 세트.
+
+\subsection{기준 아키텍처}
+
+\begin{table}[t]
+\centering
+\caption{기준 ASR 아키텍처.}
+\small
+\begin{tabular}{@{}lrll@{}}
+\toprule
+모델 & 파라미터 & 유형 & 어휘 \\
+\midrule
+Conformer CTC Med. & 122.5M & 하이브리드 & 2,049 \\
+Wav2Vec2 Base KO & 94.4M & Transformer & 56--1,912 \\
+Zipformer & 40M & Transformer & 5,000 \\
+HuBERT KO & 96M & Transformer & 2,142 \\
+KoCitrinet & ${\sim}$10M & CNN & 2,048 \\
+DeepSpeech2 & ${\sim}$30M & RNN+CNN & 2,338 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+\section{결과}
+
+\subsection{W8A8 하에서의 아키텍처 생존}
+
+\begin{table}[t]
+\centering
+\caption{T527 NPU에서의 W8A8 양자화 결과.}
+\small
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+모델 & NB & FP32 & uint8 & 추론 & 상태 \\
+ & (MB) & CER & CER & (ms) & \\
+\midrule
+\textbf{Conformer} & \textbf{102} & \textbf{6--10\%} & \textbf{10.59\%} & \textbf{233} & \textbf{성공} \\
+KoCitrinet & 62 & 8.44\% & 44.44\% & 120 & 열화 \\
+Wav2Vec2 EN & 87 & 9.74\% & 17.52\% & 715 & 열화 \\
+Wav2Vec2 KO & 77 & 9--18\% & 92.83\% & 424 & 실패 \\
+Zipformer & 63 & 16.2\% & 100\% & 50 & 실패 \\
+HuBERT KO & 76 & --- & 100\% & 423 & 실패 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Conformer만이 W8A8에서 유용한 인식 결과를 생성한다. 깊이별 합성곱(커널 31)과 배치 정규화가 어텐션 이후 활성화 분포를 재정규화하여 안정화 병목으로 작용한다.
+
+\subsection{PTQ 대 QAT 성능}
+
+\begin{table*}[t]
+\centering
+\caption{CER(\%) 비교: FP32(서버), PTQ uint8(디바이스), QAT uint8(디바이스). 굵은 글씨는 최고 디바이스 결과.}
+\small
+\begin{tabular}{@{}llrrrrr@{}}
+\toprule
+분류 & 데이터셋 & 샘플 & FP32 & PTQ & QAT & 손실 \\
+\midrule
+자체 & 7F\_KSK & 108 & 1.67 & 21.20 & \textbf{2.58} & +0.91 \\
+자체 & modelhouse\_nh & 51 & 1.42 & 7.49 & \textbf{3.11} & +1.69 \\
+자체 & 7F\_HJY & 107 & 6.89 & 15.64 & \textbf{8.33} & +1.44 \\
+자체 & modelhouse\_2m & 51 & 6.65 & 16.14 & \textbf{8.62} & +1.97 \\
+자체 & modelhouse\_3m & 51 & 13.51 & 21.73 & \textbf{13.57} & +0.06 \\
+\textbf{자체} & \textbf{평균} & \textbf{368} & \textbf{6.03} & \textbf{16.44} & \textbf{7.24} & \textbf{+1.21} \\
+\midrule
+AIHub & 012-상담 & 3,000 & 4.49 & 10.03 & \textbf{7.46} & +2.97 \\
+AIHub & eval\_other & 3,000 & 7.35 & 13.30 & \textbf{10.41} & +3.06 \\
+AIHub & eval\_clean & 3,000 & 8.17 & 16.01 & \textbf{10.95} & +2.78 \\
+AIHub & 007-저음질 & 3,000 & 13.19 & 19.01 & \textbf{11.13} & \textbf{$-$2.06} \\
+AIHub & 009-강의 & 3,000 & 9.27 & 15.66 & \textbf{12.42} & +3.15 \\
+AIHub & 010-회의 & 3,000 & 9.75 & 15.29 & \textbf{13.66} & +3.91 \\
+\textbf{AIHub} & \textbf{평균} & \textbf{18,000} & \textbf{8.70} & \textbf{14.88} & \textbf{11.01} & \textbf{+2.31} \\
+\midrule
+\textbf{전체} & \textbf{평균} & \textbf{18,368} & \textbf{7.49} & \textbf{15.59} & \textbf{9.30} & \textbf{+1.81} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+QAT는 11개 데이터셋 모두에서 PTQ 대비 개선을 보인다. 전체 양자화 손실: +8.10\%p(PTQ) $\rightarrow$ +1.81\%p(QAT), \textbf{78\% 회복}.
+
+\subsection{온디바이스 성능}
+
+\begin{table}[t]
+\centering
+\caption{오디오 길이별 온디바이스 성능.}
+\small
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+길이 & 청크 & 추론 시간 & RTF \\
+\midrule
+3\,초 & 1 & 233\,ms & 0.078 \\
+5\,초 & 2 & 466\,ms & 0.093 \\
+10\,초 & 4 & 932\,ms & 0.093 \\
+15\,초 & 6 & 1.40\,s & 0.093 \\
+20\,초 & 8 & 1.86\,s & 0.093 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+RTF 0.078--0.093, 11--13배 실시간 성능.
+
+\subsection{QAT 학습 데이터 크기}
+
+\begin{table}[t]
+\centering
+\caption{QAT 학습 데이터 크기 비교.}
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+설정 & 시간 & 스텝 & val\_loss & CER \\
+\midrule
+100k 부분집합 & 84.63 & 59,380 & 0.142 & \textbf{9.30\%} \\
+전체 데이터셋 & 4,356 & 2,557,560 & 0.069 & 14.81\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+전체 데이터셋 QAT가 오히려 더 나쁜 디바이스 CER을 산출한다. \textbf{FakeQuantize 과적합}: 43배 더 많은 기울기 업데이트로 학습 시점의 양자화 잡음에 과적응하여 배포 시점의 양자화기에 대한 일반화를 상실한다.
+
+% ============================================================
+\section{분석: 고정 윈도우 INT8 대 전체 길이 FP32}
+\label{sec:analysis}
+
+007-저음질 데이터셋에서 INT8 QAT가 FP32를 능가한다(11.13\% 대 13.19\%). 3초 이하 발화에서 INT8이 9.20\%p 우위.
+
+\begin{table}[t]
+\centering
+\caption{$\leq$\,3초 발화의 출력 통계 (007-저음질).}
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+지표 & FP32 & INT8 \\
+\midrule
+평균 정답 길이 & 8.8 & 8.8 \\
+평균 가설 길이 & 20.2 & 8.7 \\
+가설/정답 비율 & \textbf{2.30$\times$} & \textbf{0.99$\times$} \\
+삽입 우세 비율 & 73.6\% & 5.3\% \\
+정확 일치율 & 40.6\% & 62.2\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{CTC 환각}: FP32 모델이 짧은 잡음 발화에서 정답의 2.3배 길이 가설을 생성. 고정 윈도우의 제로 패딩이 잡음 프레임에 blank을 할당하여 환각을 억제한다.
+
+% ============================================================
+\section{논의}
+
+초저전력 엣지 배포(1--2\,TOPS, W8A8)에서 QAT를 적용한 Conformer CTC가 현재 유일하게 실행 가능한 한국어 ASR 경로이다. 고정 윈도우 추론의 잡음 강건성은 월패드 시나리오에 특히 적합하다. QAT 가이드라인: (1)~학습 데이터를 사전 학습의 1\% 이내로 제한; (2)~대상 하드웨어에서 검증; (3)~캘리브레이션 분포 일치.
+
+한계: 단일 하드웨어, CTC 그리디 디코딩만 사용, 도전적 도메인에서 FP32 대비 격차 존재.
+
+% ============================================================
+\section{결론}
+
+W8A8 제약 하에서 2\,TOPS 엣지 NPU에 한국어 음성인식을 배포한 최초의 사례를 제시한다. 6개 ASR 아키텍처 중 Conformer CTC만이 생존하며, MarginLoss QAT로 PTQ 열화의 78\%를 회복하여 AIHub CER 11.01\%, 실환경 7.24\%, RTF 0.08--0.09를 달성한다. 고정 윈도우 추론이 CTC 환각을 억제하여 저음질 음성에서 FP32를 2.06\%p 능가한다.
+
+% ============================================================
+\bibliographystyle{IEEEtran}
+\begin{thebibliography}{18}
+
+\bibitem{returnzero}
+Return Zero, ``Korean ASR Benchmark,'' github.com/rtzr, 2024.
+
+\bibitem{clova}
+Naver Clova, ``CLOVA Speech Recognition API,'' 2023.
+
+\bibitem{ding2022}
+S.~Ding 등, ``4-bit Conformer with native QAT,'' \textit{INTERSPEECH}, 2022.
+
+\bibitem{li2023}
+Y.~Li 등, ``Towards 2-bit Conformer quantization,'' \textit{INTERSPEECH}, 2023.
+
+\bibitem{chen2025}
+Z.~Chen 등, ``Towards one-bit ASR,'' \textit{arXiv:2505.21245}, 2025.
+
+\bibitem{wang2023}
+H.~Wang 등, ``Edge-oriented Korean ASR,'' \textit{IEIE Fall Conf.}, 2023.
+
+\bibitem{apple2024}
+Y.~Shangguan 등, ``On-device speech recognition on Apple Watch,'' \textit{NAACL Industry}, 2024.
+
+\bibitem{enerzai2025}
+ENERZAi, ``Korean ASR with low-bit Whisper,'' 2025.
+
+\bibitem{gulati2020}
+A.~Gulati 등, ``Conformer,'' \textit{INTERSPEECH}, 2020.
+
+\bibitem{arm2025}
+ARM, ``INT8 Conformer on Ethos-U85,'' 2025.
+
+\bibitem{amazon2022}
+Amazon, ``Sub-8-bit quantization for on-device SR,'' \textit{ASRU}, 2022.
+
+\bibitem{aihub}
+AI Hub, ``Korean Speech Corpus,'' aihub.or.kr, 2020--2024.
+
+\bibitem{bang2020}
+J.~Bang 등, ``KsponSpeech,'' \textit{Applied Sciences}, 2020.
+
+\bibitem{koo2021}
+J.~Koo 등, ``Korean Conformer,'' \textit{J. Acoust. Soc. Korea}, vol.~40, 2021.
+
+\bibitem{speechbrain}
+SpeechBrain, ``Conformer on KsponSpeech,'' huggingface.co, 2023.
+
+\bibitem{sungbeom}
+SungBeom, ``stt\_kr\_conformer\_ctc\_medium,'' huggingface.co, 2024.
+
+\bibitem{nemo}
+NVIDIA, ``NeMo,'' github.com/NVIDIA/NeMo, 2023.
+
+\bibitem{chen2023iccv}
+Z.~Chen 등, ``Overcoming forgetting in QAT,'' \textit{ICCV}, 2023.
+
+\end{thebibliography}
+
+\end{document}
