@@ -2,7 +2,7 @@
 
 **저자:** Huisoo Kim (김희수)
 
-**소속:** [소속기관]
+**소속:** HDC LABS (nsbb@hdc-labs.com)
 
 ---
 

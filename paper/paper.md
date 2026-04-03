@@ -2,7 +2,7 @@
 
 **Authors:** Huisoo Kim
 
-**Affiliation:** [Institution]
+**Affiliation:** HDC LABS (nsbb@hdc-labs.com)
 
 ---
 
