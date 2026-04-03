@@ -1,6 +1,6 @@
 # 2 TOPS 엣지 NPU에서의 한국어 음성인식 배포: Conformer CTC를 위한 W8A8 양자화 인식 학습
 
-**저자:** Huisoo Kim (김희수)
+**저자:** 김희수 (Huisoo Kim), 김희원 (Heewon Kim), 이건희 (Gunhee Lee)
 
 **소속:** HDC LABS (nsbb@hdc-labs.com)
 

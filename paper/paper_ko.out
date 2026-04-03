@@ -1,0 +1,22 @@
+\BOOKMARK [1][-]{section.1}{서론}{}% 1
+\BOOKMARK [1][-]{section.2}{관련 연구}{}% 2
+\BOOKMARK [2][-]{subsection.2.1}{엣지 ASR 배포}{section.2}% 3
+\BOOKMARK [2][-]{subsection.2.2}{ASR 모델 양자화}{section.2}% 4
+\BOOKMARK [2][-]{subsection.2.3}{한국어 ASR}{section.2}% 5
+\BOOKMARK [1][-]{section.3}{방법}{}% 6
+\BOOKMARK [2][-]{subsection.3.1}{대상 하드웨어}{section.3}% 7
+\BOOKMARK [2][-]{subsection.3.2}{모델 아키텍처}{section.3}% 8
+\BOOKMARK [2][-]{subsection.3.3}{모델 변환 파이프라인}{section.3}% 9
+\BOOKMARK [2][-]{subsection.3.4}{양자화 인식 학습}{section.3}% 10
+\BOOKMARK [2][-]{subsection.3.5}{고정 윈도우 추론}{section.3}% 11
+\BOOKMARK [1][-]{section.4}{실험 설정}{}% 12
+\BOOKMARK [2][-]{subsection.4.1}{평가 데이터}{section.4}% 13
+\BOOKMARK [2][-]{subsection.4.2}{기준 아키텍처}{section.4}% 14
+\BOOKMARK [1][-]{section.5}{결과}{}% 15
+\BOOKMARK [2][-]{subsection.5.1}{W8A8 하에서의 아키텍처 생존}{section.5}% 16
+\BOOKMARK [2][-]{subsection.5.2}{PTQ 대 QAT 성능}{section.5}% 17
+\BOOKMARK [2][-]{subsection.5.3}{온디바이스 성능}{section.5}% 18
+\BOOKMARK [2][-]{subsection.5.4}{QAT 학습 데이터 크기}{section.5}% 19
+\BOOKMARK [1][-]{section.6}{분석: 고정 윈도우 INT8 대 전체 길이 FP32}{}% 20
+\BOOKMARK [1][-]{section.7}{논의}{}% 21
+\BOOKMARK [1][-]{section.8}{결론}{}% 22

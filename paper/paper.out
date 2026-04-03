@@ -1,0 +1,30 @@
+\BOOKMARK [1][-]{section.1}{Introduction}{}% 1
+\BOOKMARK [1][-]{section.2}{Related Work}{}% 2
+\BOOKMARK [2][-]{subsection.2.1}{Edge ASR Deployment}{section.2}% 3
+\BOOKMARK [2][-]{subsection.2.2}{ASR Model Quantization}{section.2}% 4
+\BOOKMARK [2][-]{subsection.2.3}{Korean ASR}{section.2}% 5
+\BOOKMARK [1][-]{section.3}{Method}{}% 6
+\BOOKMARK [2][-]{subsection.3.1}{Target Hardware}{section.3}% 7
+\BOOKMARK [2][-]{subsection.3.2}{Model Architecture}{section.3}% 8
+\BOOKMARK [2][-]{subsection.3.3}{Model Conversion Pipeline}{section.3}% 9
+\BOOKMARK [2][-]{subsection.3.4}{Quantization-Aware Training}{section.3}% 10
+\BOOKMARK [2][-]{subsection.3.5}{Fixed-Window Inference}{section.3}% 11
+\BOOKMARK [1][-]{section.4}{Experimental Setup}{}% 12
+\BOOKMARK [2][-]{subsection.4.1}{Evaluation Data}{section.4}% 13
+\BOOKMARK [2][-]{subsection.4.2}{Baseline Architectures}{section.4}% 14
+\BOOKMARK [2][-]{subsection.4.3}{Metrics}{section.4}% 15
+\BOOKMARK [1][-]{section.5}{Results}{}% 16
+\BOOKMARK [2][-]{subsection.5.1}{Architecture Survival under W8A8}{section.5}% 17
+\BOOKMARK [2][-]{subsection.5.2}{PTQ vs. QAT Performance}{section.5}% 18
+\BOOKMARK [2][-]{subsection.5.3}{On-Device Performance}{section.5}% 19
+\BOOKMARK [2][-]{subsection.5.4}{QAT Training Data Size}{section.5}% 20
+\BOOKMARK [1][-]{section.6}{Analysis: Fixed-Window INT8 vs. Full-Length FP32}{}% 21
+\BOOKMARK [2][-]{subsection.6.1}{Observation}{section.6}% 22
+\BOOKMARK [2][-]{subsection.6.2}{CTC Hallucination in Full-Length Inference}{section.6}% 23
+\BOOKMARK [2][-]{subsection.6.3}{Robustness Verification}{section.6}% 24
+\BOOKMARK [2][-]{subsection.6.4}{Cross-Dataset Validation}{section.6}% 25
+\BOOKMARK [1][-]{section.7}{Discussion}{}% 26
+\BOOKMARK [2][-]{subsection.7.1}{Practical Implications}{section.7}% 27
+\BOOKMARK [2][-]{subsection.7.2}{QAT Recipe Guidelines}{section.7}% 28
+\BOOKMARK [2][-]{subsection.7.3}{Limitations}{section.7}% 29
+\BOOKMARK [1][-]{section.8}{Conclusion}{}% 30
