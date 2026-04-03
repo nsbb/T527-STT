@@ -4,14 +4,28 @@
 
 | 항목 | 값 |
 |------|-----|
-| 모델 | SungBeom Conformer CTC Medium (122.5M) |
-| QAT 학습 데이터 | AIHub 1M steps |
+| 모델 | SungBeom Conformer CTC Medium (122.5M params) |
+| QAT 학습 데이터 | AIHub 1M개 (950k train, 50k val) |
+| Steps | 59,375 (= 100k × 10ep와 동일) |
+| Epoch | 1 |
 | Margin Loss | margin=0.3, lambda=0.1 |
 | KD | X |
-| Epoch | 1 (ep01) |
+| LR | 1e-5, CosineAnnealingLR |
+| Batch | 16, AdamW |
+| FakeQuantize | 3곳 (encoder input/output, decoder output) |
 | 양자화 | uint8 asymmetric_affine KL divergence |
 | Calibration | AIHub 100개 |
 | NB 크기 | 102MB |
+| GPU | NVIDIA RTX 6000 Ada x 1 |
+
+### 기존 100k 대비 차이점
+
+```
+100k × 10ep = 59,380 steps (같은 95k 데이터 10번 반복)
+1M  × 1ep  = 59,375 steps (다양한 950k 데이터 1번)
+→ 동일 step 수, 데이터 10배 다양
+→ "다양한 데이터 1번 > 적은 데이터 10번 반복" 가설 검증
+```
 
 ## 데이터셋별 CER
 
